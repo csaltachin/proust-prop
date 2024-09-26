@@ -1,6 +1,6 @@
 use std::fmt::Display;
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Eq)]
 pub enum Expr<'so> {
     ExpVar {
         ident: &'so str,
@@ -32,7 +32,7 @@ impl Display for Expr<'_> {
     }
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Eq)]
 pub enum Ty<'so> {
     TyVar {
         ident: &'so str,
