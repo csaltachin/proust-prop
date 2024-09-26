@@ -202,7 +202,7 @@ mod tests {
         };
         let mut ctx: Context = vec![].into(); // Empty context
         let check_res = type_check(&mut ctx, &expr, &ty);
-        // [Should fail with CannotSynth; it will try to synth id1, but we can't synth lambdas]
+        // Should fail with CannotSynth; it will try to synth id1, but we can't synth lambdas
         assert_eq!(check_res, Err(CannotSynth));
 
         // ...and check the same application but with the left identity annotated correctly
