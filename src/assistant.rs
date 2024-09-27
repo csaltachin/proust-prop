@@ -62,16 +62,17 @@ enum AssistantError<'so> {
     BadGoalID(usize),
 }
 
-struct Assistant<'so, 'ta> {
-    task: &'ta Ty<'so>,
+struct Assistant<'so> {
+    task: Rc<Ty<'so>>,
     current_expr: Option<Expr<'so, Goal<'so>>>, // None means uninitialized
     goal_counter: usize,
     goal_map: Rc<RefCell<GoalMap<'so>>>,
 }
 
-impl<'so, 'ta> Assistant<'so, 'ta> {
-    fn make_assistant(task: &'ta Ty<'so>) -> Assistant<'so, 'ta> {
-        let map: GoalMap<'so> = HashMap::new();
+impl<'so> Assistant<'so> {
+    fn make_assistant(task: Rc<Ty<'so>>) -> Assistant<'so> {
+        let mut map: GoalMap<'so> = HashMap::new();
+        map.insert(0, (task.clone(), vec![].into()));
         let goal_map = Rc::new(RefCell::new(map));
         let mut assistant = Self {
             task,
