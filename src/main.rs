@@ -1,3 +1,4 @@
+mod assistant;
 mod ast;
 mod check;
 

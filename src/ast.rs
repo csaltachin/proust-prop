@@ -1,36 +1,22 @@
-use std::fmt::Display;
+use std::{
+    fmt::{Debug, Display},
+    rc::Rc,
+};
 
-#[derive(Debug, PartialEq, Eq)]
-pub enum Expr<'so> {
-    ExpVar {
-        ident: &'so str,
-    },
-    Lambda {
-        var_ident: &'so str,
-        body: Box<Expr<'so>>,
-    },
-    App {
-        func: Box<Expr<'so>>,
-        arg: Box<Expr<'so>>,
-    },
-    Ann {
-        expr: Box<Expr<'so>>,
-        ty: Box<Ty<'so>>,
-    },
+use crate::check::Context;
+
+// A trait for attaching data to holes and injecting side-effects when type-checking them. The unit
+// impl is the trivial hole: no data or effects.
+
+pub trait HoleWithEffect<'so>: Debug + Eq {
+    fn check(&self, ty: Rc<Ty<'so>>, ctx: &Context<'so>);
 }
 
-impl Display for Expr<'_> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::ExpVar { ident } => write!(f, "{ident}"),
-            Expr::Lambda { var_ident, body } => {
-                write!(f, "(Lam {var_ident} => {})", body.to_string())
-            }
-            Expr::App { func, arg } => write!(f, "({} {})", func.to_string(), arg.to_string()),
-            Expr::Ann { expr, ty } => write!(f, "({} : {})", expr.to_string(), ty.to_string()),
-        }
-    }
+impl HoleWithEffect<'_> for () {
+    fn check(&self, _: Rc<Ty<'_>>, _: &Context) {}
 }
+
+// AST nodes for types: either a type variable, or an arrow type
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum Ty<'so> {
@@ -38,8 +24,8 @@ pub enum Ty<'so> {
         ident: &'so str,
     },
     Arrow {
-        domain: Box<Ty<'so>>,
-        range: Box<Ty<'so>>,
+        domain: Rc<Ty<'so>>,
+        range: Rc<Ty<'so>>,
     },
 }
 
@@ -54,11 +40,57 @@ impl Display for Ty<'_> {
     }
 }
 
+// AST nodes for expressions, parametrized over the hole type H
+
+#[derive(Debug, PartialEq, Eq)]
+pub enum Expr<'so, H>
+where
+    H: HoleWithEffect<'so>,
+{
+    ExpVar {
+        ident: &'so str,
+    },
+    Lambda {
+        var_ident: &'so str,
+        body: Box<Expr<'so, H>>,
+    },
+    App {
+        func: Box<Expr<'so, H>>,
+        arg: Box<Expr<'so, H>>,
+    },
+    Ann {
+        expr: Box<Expr<'so, H>>,
+        ty: Rc<Ty<'so>>,
+    },
+    ExpHole(H),
+}
+
+impl Display for Expr<'_, ()> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::ExpVar { ident } => write!(f, "{ident}"),
+            Self::Lambda { var_ident, body } => {
+                write!(f, "(Lam {var_ident} => {})", body.to_string())
+            }
+            Self::App { func, arg } => write!(f, "({} {})", func.to_string(), arg.to_string()),
+            Self::Ann { expr, ty } => write!(f, "({} : {})", expr.to_string(), ty.to_string()),
+            Self::ExpHole(..) => write!(f, "_"),
+        }
+    }
+}
+
+// A handy alias for expressions with trivial holes
+
+pub type PureExpr<'so> = Expr<'so, ()>;
+
+// Now, parser stuff.
+
 enum ParseError {
     ExpectedChar(char),
     ExpectedIdent,
     ExpectedToken(&'static str),
     ExpectedEof,
+    ExpectedHole,
 }
 
 impl Display for ParseError {
@@ -68,6 +100,7 @@ impl Display for ParseError {
             Self::ExpectedChar(c) => write!(f, "Expected character '{c}'"),
             Self::ExpectedToken(tok) => write!(f, "Expected token {tok}"),
             Self::ExpectedEof => write!(f, "Expected end of string"),
+            Self::ExpectedHole => write!(f, "Expected hole"),
         }
     }
 }
@@ -137,6 +170,13 @@ impl<'so> Parser<'so> {
         }
     }
 
+    fn try_parse_hole(&mut self) -> Option<&'so str> {
+        let left = self.cursor;
+        self.expect_advance_char('_').ok()?;
+        let _ = self.try_parse_ident().is_some();
+        Some(&self.source[left..self.cursor])
+    }
+
     fn try_parse_ident(&mut self) -> Option<&'so str> {
         let left = self.cursor;
 
@@ -155,59 +195,64 @@ impl<'so> Parser<'so> {
         }
     }
 
-    fn parse_sexp(&mut self) -> ParseResult<Expr<'so>> {
+    fn parse_sexp(&mut self) -> ParseResult<PureExpr<'so>> {
         use Expr::*;
 
-        if self.peek_char().map_or(false, |it| it == '(') {
-            self.expect_advance_char('(')?;
-            self.eat_whitespace();
-
-            let expr_res = if self.try_consume_token("Lam") {
-                // Lambda
-                self.eat_whitespace();
-                let var_ident = self.try_parse_ident().ok_or(ParseError::ExpectedIdent)?;
-                self.eat_whitespace();
-                self.try_consume_token("=>")
-                    .then_some(())
-                    .ok_or(ParseError::ExpectedToken("=>"))?;
-                self.eat_whitespace();
-                let body = self.parse_sexp()?;
-                Ok(Lambda {
-                    var_ident,
-                    body: body.into(),
-                })
-            } else {
-                // Parse a first expression
-                let first_expr = self.parse_sexp()?;
+        match self.peek_char() {
+            Some('(') => {
+                self.expect_advance_char('(')?;
                 self.eat_whitespace();
 
-                if self.peek_char().map_or(false, |it| it == ':') {
-                    // Type-annotated expression
-                    self.expect_advance_char(':')?;
+                let expr_res = if self.try_consume_token("Lam") {
+                    // Lambda
                     self.eat_whitespace();
-                    let ty_ann = self.parse_ty()?;
-                    Ok(Ann {
-                        expr: first_expr.into(),
-                        ty: ty_ann.into(),
+                    let var_ident = self.try_parse_ident().ok_or(ParseError::ExpectedIdent)?;
+                    self.eat_whitespace();
+                    self.try_consume_token("=>")
+                        .then_some(())
+                        .ok_or(ParseError::ExpectedToken("=>"))?;
+                    self.eat_whitespace();
+                    let body = self.parse_sexp()?;
+                    Ok(Lambda {
+                        var_ident,
+                        body: body.into(),
                     })
                 } else {
-                    // Application
-                    let second_expr = self.parse_sexp()?;
-                    Ok(App {
-                        func: first_expr.into(),
-                        arg: second_expr.into(),
-                    })
-                }
-            };
+                    // Parse a first expression
+                    let first_expr = self.parse_sexp()?;
+                    self.eat_whitespace();
 
-            self.eat_whitespace();
-            self.expect_advance_char(')')?;
-            expr_res
-        } else {
-            // Expr variable
-            self.try_parse_ident()
+                    if self.peek_char().map_or(false, |it| it == ':') {
+                        // Type-annotated expression
+                        self.expect_advance_char(':')?;
+                        self.eat_whitespace();
+                        let ty_ann = self.parse_ty()?;
+                        Ok(Ann {
+                            expr: first_expr.into(),
+                            ty: ty_ann.into(),
+                        })
+                    } else {
+                        // Application
+                        let second_expr = self.parse_sexp()?;
+                        Ok(App {
+                            func: first_expr.into(),
+                            arg: second_expr.into(),
+                        })
+                    }
+                };
+
+                self.eat_whitespace();
+                self.expect_advance_char(')')?;
+                expr_res
+            }
+            Some('_') => self
+                .try_parse_hole()
+                .map(|_| ExpHole(()))
+                .ok_or(ParseError::ExpectedHole),
+            _ => self
+                .try_parse_ident()
                 .map(|ident| ExpVar { ident })
-                .ok_or(ParseError::ExpectedIdent)
+                .ok_or(ParseError::ExpectedIdent),
         }
     }
 
@@ -244,21 +289,31 @@ impl<'so> Parser<'so> {
         }
     }
 
-    fn parse_source(&mut self) -> ParseResult<Expr<'so>> {
+    fn parse_source_to_pure_expr(&mut self) -> ParseResult<PureExpr<'so>> {
         self.eat_whitespace();
         let expr = self.parse_sexp()?;
         self.eat_whitespace();
         self.expect_eof()?;
         Ok(expr)
     }
+
+    fn parse_source_to_ty(&mut self) -> ParseResult<Ty<'so>> {
+        self.eat_whitespace();
+        let ty = self.parse_ty()?;
+        self.eat_whitespace();
+        self.expect_eof()?;
+        Ok(ty)
+    }
 }
 
-impl<'so> TryFrom<&'so str> for Expr<'so> {
+impl<'so> TryFrom<&'so str> for PureExpr<'so> {
     type Error = String;
 
     fn try_from(source: &'so str) -> Result<Self, Self::Error> {
         let mut parser: Parser<'so> = source.into();
-        parser.parse_source().map_err(|e| e.to_string())
+        parser
+            .parse_source_to_pure_expr()
+            .map_err(|e| e.to_string())
     }
 }
 
@@ -266,9 +321,7 @@ impl<'so> TryFrom<&'so str> for Expr<'so> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use Expr::*;
-    use Ty::*;
+    use super::{Expr::*, PureExpr, Ty::*};
 
     #[test]
     fn parse_simple_exps() {
@@ -320,32 +373,32 @@ mod tests {
     #[test]
     fn print_simple_exps() {
         let expected = "x";
-        let ast = ExpVar { ident: "x" };
+        let ast: PureExpr = ExpVar { ident: "x" };
         assert_eq!(expected, ast.to_string());
 
         let expected = "(Lam x => x)";
-        let ast = Lambda {
+        let ast: PureExpr = Lambda {
             var_ident: "x",
             body: (ExpVar { ident: "x" }).into(),
         };
         assert_eq!(expected, ast.to_string());
 
         let expected = "(f a)";
-        let ast = App {
+        let ast: PureExpr = App {
             func: (ExpVar { ident: "f" }).into(),
             arg: (ExpVar { ident: "a" }).into(),
         };
         assert_eq!(expected, ast.to_string());
 
         let expected = "(x : T)";
-        let ast = Ann {
+        let ast: PureExpr = Ann {
             expr: (ExpVar { ident: "x" }).into(),
             ty: (TyVar { ident: "T" }).into(),
         };
         assert_eq!(expected, ast.to_string());
 
         let expected = "((Lam x => a) : (T -> W))";
-        let lam = Lambda {
+        let lam: PureExpr = Lambda {
             var_ident: "x",
             body: (ExpVar { ident: "a" }).into(),
         };
@@ -353,7 +406,7 @@ mod tests {
             domain: (TyVar { ident: "T" }).into(),
             range: (TyVar { ident: "W" }).into(),
         };
-        let ast = Ann {
+        let ast: PureExpr = Ann {
             expr: lam.into(),
             ty: annot.into(),
         };
