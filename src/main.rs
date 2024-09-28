@@ -7,6 +7,7 @@ use ast::{PureExpr, Ty};
 mod assistant;
 mod ast;
 mod check;
+mod parse;
 
 fn is_only_whitespace(s: &str) -> bool {
     s.split_ascii_whitespace().next().is_none()
