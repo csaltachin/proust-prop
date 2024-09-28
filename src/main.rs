@@ -36,12 +36,53 @@ impl FromStr for ReplCommand {
         //println!("Read com: [{com}] with arg: [{maybe_arg:?}]");
 
         match (com, arg) {
+            // Just parse type and print it back
+            ("parse-type", None) => {
+                println!("No type specified.");
+                Ok(Nothing)
+            }
+            ("parse-type", Some(ty_str)) => {
+                let ty: Ty<&str> = ty_str
+                    .try_into()
+                    .map_err(|parse_err| format!("[Error while parsing type] {parse_err}."))?;
+                println!("Parsed type: [{ty}]");
+                Ok(Nothing)
+            }
+            // Just parse expr and print it back
+            ("parse-expr", None) => {
+                println!("No expression specified.");
+                Ok(Nothing)
+            }
+            ("parse-expr", Some(ty_str)) => {
+                let expr: PureExpr<&str> = ty_str
+                    .try_into()
+                    .map_err(|parse_err| format!("[Error while parsing type] {parse_err}."))?;
+                println!("Parsed expression: [{expr}]");
+                Ok(Nothing)
+            }
+            // Set task
+            ("task", None) => {
+                println!("No task specified; use \"task <type>\" to set a task.");
+                Ok(Nothing)
+            }
+            ("task", Some(ty_str)) => {
+                let ty = ty_str
+                    .parse()
+                    .map_err(|parse_err| format!("[Error while parsing type] {parse_err}."))?;
+                println!("Task is now {ty}");
+                Ok(Task(ty))
+            }
+            // Refine
+            ("refine", _) => todo!(),
+            // Quit
             ("quit", None) => Ok(Quit),
             ("quit", Some(_)) => {
                 println!("To quit, just press <C-d> or type \"quit\" with no arguments.");
                 Ok(Nothing)
             }
+            // Empty line
             (s, None) if is_only_whitespace(s) => Ok(Nothing),
+            // Unknown command
             (bad_com, _) => Err(format!("Unknown command \"{bad_com}\".")),
         }
     }
@@ -89,7 +130,7 @@ fn assistant_repl() -> io::Result<()> {
                             }
                         },
                         None => {
-                            println!("No task provided!");
+                            println!("No task has been set yet; use \"task <type>\".");
                         }
                     },
                     Ok(Nothing) => {

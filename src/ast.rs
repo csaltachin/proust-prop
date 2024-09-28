@@ -2,6 +2,7 @@ use std::{
     fmt::{Debug, Display},
     marker::PhantomData,
     rc::Rc,
+    str::FromStr,
 };
 
 use crate::check::Context;
@@ -130,12 +131,9 @@ where
     }
 }
 
-// Some handy type aliases for expressions with trivial holes, and in particular with borrowed
-// idents
+// A handy type alias for expressions with trivial holes
 
 pub type PureExpr<'so, S> = Expr<'so, S, ()>;
-pub type PureExprWithBorrowedIdents<'so> = Expr<'so, &'so str, ()>;
-pub type PureExprWithOwnedIdents = Expr<'static, String, ()>;
 
 // Now, parser stuff.
 
@@ -224,15 +222,7 @@ impl<'so> Parser<'so> {
         }
     }
 
-    fn try_parse_hole<S>(&mut self) -> Option<S>
-    where
-        S: IdentKind<'so>,
-    {
-        let left = self.cursor;
-        self.expect_advance_char('_').ok()?;
-        let _ = self.try_parse_ident::<S>().is_some();
-        Some(IdentKind::parse_ident(&self.source[left..self.cursor]))
-    }
+    // Parsing holes and idents parametrized over 'so...
 
     fn try_parse_ident<S>(&mut self) -> Option<S>
     where
@@ -254,6 +244,47 @@ impl<'so> Parser<'so> {
             Some(IdentKind::parse_ident(&self.source[left..self.cursor]))
         }
     }
+
+    fn try_parse_hole<S>(&mut self) -> Option<S>
+    where
+        S: IdentKind<'so>,
+    {
+        let left = self.cursor;
+        self.expect_advance_char('_').ok()?;
+        let _ = self.try_parse_ident::<S>().is_some();
+        Some(IdentKind::parse_ident(&self.source[left..self.cursor]))
+    }
+
+    // ...and owned-ident versions
+
+    fn try_parse_owned_ident(&mut self) -> Option<String> {
+        let left = self.cursor;
+
+        while let Some(ch_len) = self
+            .peek_char()
+            .filter(|it| it.is_ascii_alphabetic())
+            .map(|it| it.len_utf8())
+        {
+            self.cursor += ch_len;
+        }
+
+        if self.cursor == left {
+            None
+        } else {
+            Some(self.source[left..self.cursor].to_string())
+        }
+    }
+
+    fn try_parse_owned_hole(&mut self) -> Option<String> {
+        let left = self.cursor;
+        self.expect_advance_char('_').ok()?;
+        let _ = self.try_parse_ident::<&str>().is_some(); // We only care if it's some or none
+        Some(IdentKind::parse_ident(
+            &self.source[left..self.cursor].to_string(),
+        ))
+    }
+
+    // Main internal parsers for PureExpr and Ty
 
     fn parse_sexp<S>(&mut self) -> ParseResult<PureExpr<'so, S>>
     where
@@ -358,9 +389,115 @@ impl<'so> Parser<'so> {
         }
     }
 
-    fn parse_pure_expr_with_borrowed_idents(
-        &mut self,
-    ) -> ParseResult<PureExprWithBorrowedIdents<'so>> {
+    // A couple convenience methods for ident-owned parsing without depending on the source
+    // lifetime 'so
+    // TODO: can we avoid repeating these two functions from earlier?
+
+    fn parse_sexp_with_owned_idents(&mut self) -> ParseResult<PureExpr<'static, String>> {
+        use Expr::*;
+
+        match self.peek_char() {
+            Some('(') => {
+                self.expect_advance_char('(')?;
+                self.eat_whitespace();
+
+                let expr_res = if self.try_consume_token("Lam") {
+                    // Lambda
+                    self.eat_whitespace();
+                    let var_ident = self
+                        .try_parse_owned_ident()
+                        .ok_or(ParseError::ExpectedIdent)?;
+                    self.eat_whitespace();
+                    self.try_consume_token("=>")
+                        .then_some(())
+                        .ok_or(ParseError::ExpectedToken("=>"))?;
+                    self.eat_whitespace();
+                    let body = self.parse_sexp_with_owned_idents()?;
+                    Ok(Lambda {
+                        var_ident,
+                        body: body.into(),
+                    })
+                } else {
+                    // Parse a first expression
+                    let first_expr = self.parse_sexp_with_owned_idents()?;
+                    self.eat_whitespace();
+
+                    if self.peek_char().map_or(false, |it| it == ':') {
+                        // Type-annotated expression
+                        self.expect_advance_char(':')?;
+                        self.eat_whitespace();
+                        let ty_ann = self.parse_ty_with_owned_idents()?;
+                        Ok(Ann {
+                            expr: first_expr.into(),
+                            ty: ty_ann.into(),
+                        })
+                    } else {
+                        // Application
+                        let second_expr = self.parse_sexp_with_owned_idents()?;
+                        Ok(App {
+                            func: first_expr.into(),
+                            arg: second_expr.into(),
+                        })
+                    }
+                };
+
+                self.eat_whitespace();
+                self.expect_advance_char(')')?;
+                expr_res
+            }
+            Some('_') => self
+                .try_parse_owned_hole()
+                .map(|_| ExpHole(()))
+                .ok_or(ParseError::ExpectedHole),
+            _ => self
+                .try_parse_owned_ident()
+                .map(|ident| ExpVar { ident })
+                .ok_or(ParseError::ExpectedIdent),
+        }
+    }
+
+    fn parse_ty_with_owned_idents(&mut self) -> ParseResult<Ty<'static, String>> {
+        use Ty::*;
+
+        if self.peek_char().map_or(false, |it| it == '(') {
+            // Arrow
+            self.expect_advance_char('(')?;
+            self.eat_whitespace();
+
+            let left_ty = self.parse_ty_with_owned_idents()?;
+
+            self.eat_whitespace();
+            self.try_consume_token("->")
+                .then_some(())
+                .ok_or(ParseError::ExpectedToken("->"))?;
+            self.eat_whitespace();
+
+            let right_ty = self.parse_ty_with_owned_idents()?;
+
+            self.eat_whitespace();
+            self.expect_advance_char(')')?;
+
+            Ok(Arrow {
+                domain: left_ty.into(),
+                range: right_ty.into(),
+            })
+        } else {
+            // Type variable
+            self.try_parse_ident()
+                .map(|ident| TyVar {
+                    ident: IdentKind::parse_ident(ident),
+                    phantom: PhantomData,
+                })
+                .ok_or(ParseError::ExpectedIdent)
+        }
+    }
+
+    // Wrappers for parsing PureExpr and Ty, parametrized over 'so...
+
+    fn parse_entire_pure_expr<S>(&mut self) -> ParseResult<PureExpr<'so, S>>
+    where
+        S: IdentKind<'so>,
+    {
         self.eat_whitespace();
         let expr = self.parse_sexp()?;
         self.eat_whitespace();
@@ -368,22 +505,84 @@ impl<'so> Parser<'so> {
         Ok(expr)
     }
 
-    fn parse_ty_with_borrowed_idents(&mut self) -> ParseResult<Ty<'so, &'so str>> {
+    fn parse_entire_ty<S>(&mut self) -> ParseResult<Ty<'so, S>>
+    where
+        S: IdentKind<'so>,
+    {
         self.eat_whitespace();
         let ty = self.parse_ty()?;
         self.eat_whitespace();
         self.expect_eof()?;
         Ok(ty)
     }
+
+    // and for ('static, String) PureExpr and Ty
+
+    fn parse_entire_pure_expr_with_owned_idents(
+        &mut self,
+    ) -> ParseResult<PureExpr<'static, String>> {
+        self.eat_whitespace();
+        let expr = self.parse_sexp_with_owned_idents()?;
+        self.eat_whitespace();
+        self.expect_eof()?;
+        Ok(expr)
+    }
+
+    fn parse_entire_ty_with_owned_idents(&mut self) -> ParseResult<Ty<'static, String>> {
+        self.eat_whitespace();
+        let ty = self.parse_ty_with_owned_idents()?;
+        self.eat_whitespace();
+        self.expect_eof()?;
+        Ok(ty)
+    }
 }
 
-impl<'so> TryFrom<&'so str> for PureExprWithBorrowedIdents<'so> {
+// PureExpr and Ty parsing, parametrized over the 'so lifetime...
+
+impl<'so, S> TryFrom<&'so str> for PureExpr<'so, S>
+where
+    S: IdentKind<'so>,
+{
     type Error = String;
 
     fn try_from(source: &'so str) -> Result<Self, Self::Error> {
         let mut parser: Parser<'so> = source.into();
+        parser.parse_entire_pure_expr().map_err(|e| e.to_string())
+    }
+}
+
+impl<'so, S> TryFrom<&'so str> for Ty<'so, S>
+where
+    S: IdentKind<'so>,
+{
+    type Error = String;
+
+    fn try_from(source: &'so str) -> Result<Self, Self::Error> {
+        let mut parser: Parser<'so> = source.into();
+        parser.parse_entire_ty().map_err(|e| e.to_string())
+    }
+}
+
+// ...and for ('static, String) PureExpr and Ty
+
+impl FromStr for Ty<'static, String> {
+    type Err = String;
+
+    fn from_str(source: &str) -> Result<Self, Self::Err> {
+        let mut parser: Parser = source.into();
         parser
-            .parse_pure_expr_with_borrowed_idents()
+            .parse_entire_ty_with_owned_idents()
+            .map_err(|e| e.to_string())
+    }
+}
+
+impl FromStr for PureExpr<'static, String> {
+    type Err = String;
+
+    fn from_str(source: &str) -> Result<Self, Self::Err> {
+        let mut parser: Parser = source.into();
+        parser
+            .parse_entire_pure_expr_with_owned_idents()
             .map_err(|e| e.to_string())
     }
 }
@@ -392,9 +591,12 @@ impl<'so> TryFrom<&'so str> for PureExprWithBorrowedIdents<'so> {
 
 #[cfg(test)]
 mod tests {
+    use crate::ast::{Expr::*, Ty::*};
     use std::marker::PhantomData;
 
-    use super::{Expr::*, PureExprWithBorrowedIdents, Ty::*};
+    use super::Expr;
+
+    type PureExprWithBorrowedIdents<'so> = Expr<'so, &'so str, ()>;
 
     #[test]
     fn parse_simple_exps() {
