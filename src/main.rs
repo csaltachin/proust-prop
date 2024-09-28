@@ -8,11 +8,15 @@ mod assistant;
 mod ast;
 mod check;
 
+fn is_only_whitespace(s: &str) -> bool {
+    s.split_ascii_whitespace().next().is_none()
+}
+
 enum ReplCommand {
     Task(Ty<'static, String>),
     Refine(usize, PureExpr<'static, String>),
     Quit,
-    EmptyLine,
+    Nothing,
 }
 
 impl FromStr for ReplCommand {
@@ -21,14 +25,23 @@ impl FromStr for ReplCommand {
     fn from_str(input: &str) -> Result<Self, Self::Err> {
         use ReplCommand::*;
 
-        match input
+        let (com, arg) = input
             .trim_end_matches('\n')
             .split_once(' ')
+            // If arg is just whitespace, we filter it as None
             .map_or((input, None), |(p, s)| {
-                (p, Some(s).filter(|ss| ss.is_empty()))
-            }) {
-            // TODO: parse commands properly
-            (empty, None) if empty.split_ascii_whitespace().next().is_none() => Ok(EmptyLine),
+                (p, Some(s).filter(|ss| !is_only_whitespace(ss)))
+            });
+
+        //println!("Read com: [{com}] with arg: [{maybe_arg:?}]");
+
+        match (com, arg) {
+            ("quit", None) => Ok(Quit),
+            ("quit", Some(_)) => {
+                println!("To quit, just press <C-d> or type \"quit\" with no arguments.");
+                Ok(Nothing)
+            }
+            (s, None) if is_only_whitespace(s) => Ok(Nothing),
             (bad_com, _) => Err(format!("Unknown command \"{bad_com}\".")),
         }
     }
@@ -52,6 +65,8 @@ fn assistant_repl() -> io::Result<()> {
                 return Err(io_e);
             }
             Ok(0) => {
+                println!("<C-d>");
+                println!("Bye!");
                 break;
             }
             Ok(_) => {
@@ -77,21 +92,21 @@ fn assistant_repl() -> io::Result<()> {
                             println!("No task provided!");
                         }
                     },
-                    Ok(EmptyLine) => {
+                    Ok(Nothing) => {
                         continue;
                     }
                     Ok(Quit) => {
+                        println!("Bye!");
                         break;
                     }
-                    Err(err_s) => {
-                        println!("{err_s}");
+                    Err(parse_err) => {
+                        println!("{parse_err}");
                     }
                 };
             }
         }
     }
 
-    println!("Bye!");
     Ok(())
 }
 
