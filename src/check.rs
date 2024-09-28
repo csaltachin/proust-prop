@@ -65,6 +65,14 @@ where
     fn pop(&mut self) -> Option<(S, Rc<Ty<'so, S>>)> {
         self.ty_bindings.pop()
     }
+
+    pub fn is_empty(&self) -> bool {
+        self.ty_bindings.is_empty()
+    }
+
+    pub fn get_bindings(&self) -> &Vec<(S, Rc<Ty<'so, S>>)> {
+        &self.ty_bindings
+    }
 }
 
 pub fn type_check<'so, S, H>(
@@ -155,11 +163,11 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ast::PureExprWithBorrowedIdents;
     use Expr::*;
     use Ty::*;
     use TypeError::*;
 
+    type PureExprWithBorrowedIdents<'so> = Expr<'so, &'so str, ()>;
     type StaticContext = Context<'static, &'static str>;
 
     fn ty_var<'so, S>(ident: S) -> Ty<'so, S>

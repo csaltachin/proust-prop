@@ -30,7 +30,7 @@ impl FromStr for ReplCommand {
             .split_once(' ')
             // If arg is just whitespace, we filter it as None
             .map_or((input, None), |(p, s)| {
-                (p, Some(s).filter(|ss| !is_only_whitespace(ss)))
+                (p, Some(s.trim_ascii()).filter(|ss| !ss.is_empty()))
             });
 
         //println!("Read com: [{com}] with arg: [{maybe_arg:?}]");
@@ -69,11 +69,34 @@ impl FromStr for ReplCommand {
                 let ty = ty_str
                     .parse()
                     .map_err(|parse_err| format!("[Error while parsing type] {parse_err}."))?;
-                println!("Task is now {ty}");
                 Ok(Task(ty))
             }
             // Refine
-            ("refine", _) => todo!(),
+            ("refine", None) => {
+                println!("No goal or expression specified; use \"refine <goal> <expr>\".");
+                Ok(Nothing)
+            }
+            ("refine", Some(id_and_expr)) => {
+                let (id_str, expr_str) = match id_and_expr.split_once(' ') {
+                    // Two args
+                    Some((p, s)) if !s.is_empty() => (p, s),
+                    // One or zero args
+                    _ => {
+                        println!("\"refine\" takes two arguments: a goal number <goal> and an expression <expr>.");
+                        return Ok(Nothing);
+                    }
+                };
+
+                let id: usize = id_str
+                    .parse()
+                    .map_err(|e| format!("[Error while parsing goal number] {e}."))?;
+
+                let expr = expr_str.parse().map_err(|parse_err| {
+                    format!("[Error while parsing expression] {parse_err}.")
+                })?;
+
+                Ok(Refine(id, expr))
+            }
             // Quit
             ("quit", None) => Ok(Quit),
             ("quit", Some(_)) => {
@@ -89,9 +112,9 @@ impl FromStr for ReplCommand {
 }
 
 fn assistant_repl() -> io::Result<()> {
-    println!("Proust REPL started.");
+    println!(">> Proust REPL started.");
     println!(
-        "Type \"task <type>\" to set a task, then \"refine <hole> <expr>\" to narrow down goals."
+        ">> Type \"task <type>\" to set a task, then \"refine <hole> <expr>\" to narrow down goals."
     );
     let mut input_buf = String::new();
     let mut assistant: Option<Assistant<'static, String>> = None;
@@ -116,9 +139,12 @@ fn assistant_repl() -> io::Result<()> {
                 match input_buf.as_str().trim_end_matches('\n').parse() {
                     Ok(Task(ty)) => {
                         assistant = Some(Assistant::make_assistant(ty));
+                        assistant
+                            .as_ref()
+                            .map(|asst| println!("{}", asst.pretty_print_status()));
                     }
                     Ok(Refine(id, pure_expr)) => match assistant.as_mut() {
-                        Some(assistant) => match assistant.refine_goal(id, pure_expr) {
+                        Some(asst) => match asst.refine_goal(id, pure_expr) {
                             Err(AssistantError::BadGoalID(bad_id)) => {
                                 println!("Goal {bad_id} not found.");
                             }
@@ -126,7 +152,8 @@ fn assistant_repl() -> io::Result<()> {
                                 println!("[Type error at goal {id}] {ty_err}.");
                             }
                             Ok(()) => {
-                                println!("Goal {id} successfully refined!")
+                                println!("Goal {id} successfully refined!");
+                                println!("{}", asst.pretty_print_status());
                             }
                         },
                         None => {

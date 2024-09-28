@@ -73,6 +73,23 @@ where
 
 type GoalExpr<'so, S> = Expr<'so, S, Goal<'so, S>>;
 
+impl<'so, S> Display for GoalExpr<'so, S>
+where
+    S: IdentKind<'so>,
+{
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::ExpVar { ident } => write!(f, "{ident}"),
+            Self::Lambda { var_ident, body } => {
+                write!(f, "(Lam {var_ident} => {})", body.to_string())
+            }
+            Self::App { func, arg } => write!(f, "({} {})", func.to_string(), arg.to_string()),
+            Self::Ann { expr, ty } => write!(f, "({} : {})", expr.to_string(), ty.to_string()),
+            Self::ExpHole(Goal { id, .. }) => write!(f, "?{id}"),
+        }
+    }
+}
+
 // Assistant state
 
 pub enum AssistantError<'so, S>
@@ -116,6 +133,10 @@ where
         });
         let _ = assistant.current_expr.insert(init_expr);
         assistant
+    }
+
+    pub fn get_task(&self) -> &Ty<'so, S> {
+        self.task.as_ref()
     }
 
     pub fn refine_goal(
@@ -241,6 +262,46 @@ where
                     map: self.goal_map.clone(),
                 })
             }
+        }
+    }
+
+    // Some helper methods for REPL printing
+
+    pub fn pretty_print_goals(&self) -> Vec<String> {
+        self.goal_map
+            .borrow()
+            .iter()
+            .map(|(id, (ty, ctx))| {
+                let ctx_str = if ctx.is_empty() {
+                    String::new()
+                } else {
+                    let pairs_str = ctx
+                        .get_bindings()
+                        .iter()
+                        .map(|(var, ty)| format!("\n    {var}: {ty}"))
+                        .collect::<Vec<_>>()
+                        .concat();
+                    format!("\n  with context:{pairs_str}")
+                };
+                format!("[{id}] {ty}{ctx_str}")
+            })
+            .collect()
+    }
+
+    pub fn pretty_print_status(&self) -> String {
+        let goals_left = self.goal_map.borrow().len();
+        let task_str = self.task.to_string();
+        let expr_str = self
+            .current_expr
+            .as_ref()
+            .map(|ex| ex.to_string())
+            .unwrap_or("<uninitialized>".to_string());
+
+        if goals_left == 0 {
+            format!("Task complete! Found a proof of {task_str}:\n  {expr_str}")
+        } else {
+            let s = if goals_left == 1 { "" } else { "s" };
+            format!("Task with {goals_left} goal{s} is now:\n  {expr_str} : {task_str}")
         }
     }
 }

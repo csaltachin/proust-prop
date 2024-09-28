@@ -114,6 +114,9 @@ where
     ExpHole(H),
 }
 
+// We implement this directly for H = () expressions, because we don't want to rely on a Display
+// impl for ()
+
 impl<'so, S> Display for Expr<'so, S, ()>
 where
     S: IdentKind<'so>,
