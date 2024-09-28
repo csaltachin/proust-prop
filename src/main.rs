@@ -12,12 +12,15 @@ enum ReplCommand {
     Task(Ty<'static, String>),
     Refine(usize, PureExpr<'static, String>),
     Quit,
+    EmptyLine,
 }
 
 impl FromStr for ReplCommand {
     type Err = String;
 
     fn from_str(input: &str) -> Result<Self, Self::Err> {
+        use ReplCommand::*;
+
         match input
             .trim_end_matches('\n')
             .split_once(' ')
@@ -25,6 +28,7 @@ impl FromStr for ReplCommand {
                 (p, Some(s).filter(|ss| ss.is_empty()))
             }) {
             // TODO: parse commands properly
+            (empty, None) if empty.split_ascii_whitespace().next().is_none() => Ok(EmptyLine),
             (bad_com, _) => Err(format!("Unknown command \"{bad_com}\".")),
         }
     }
@@ -51,11 +55,13 @@ fn assistant_repl() -> io::Result<()> {
                 break;
             }
             Ok(_) => {
-                match input_buf.as_str().parse() {
-                    Ok(ReplCommand::Task(ty)) => {
+                use ReplCommand::*;
+
+                match input_buf.as_str().trim_end_matches('\n').parse() {
+                    Ok(Task(ty)) => {
                         assistant = Some(Assistant::make_assistant(ty));
                     }
-                    Ok(ReplCommand::Refine(id, pure_expr)) => match assistant.as_mut() {
+                    Ok(Refine(id, pure_expr)) => match assistant.as_mut() {
                         Some(assistant) => match assistant.refine_goal(id, pure_expr) {
                             Err(AssistantError::BadGoalID(bad_id)) => {
                                 println!("Goal {bad_id} not found.");
@@ -71,7 +77,10 @@ fn assistant_repl() -> io::Result<()> {
                             println!("No task provided!");
                         }
                     },
-                    Ok(ReplCommand::Quit) => {
+                    Ok(EmptyLine) => {
+                        continue;
+                    }
+                    Ok(Quit) => {
                         break;
                     }
                     Err(err_s) => {
