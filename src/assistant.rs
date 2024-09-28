@@ -3,75 +3,105 @@ use std::collections::HashMap;
 use std::fmt::{Debug, Display};
 use std::rc::Rc;
 
-use crate::ast::{Expr, HoleWithEffect, PureExpr, Ty};
+use crate::ast::{Expr, HoleKind, IdentKind, PureExpr, Ty};
 use crate::check::{type_check, Context, TypeError};
 
 // Maps goal IDs to (ty, context) pairs.
 
-type GoalMap<'so> = HashMap<usize, (Rc<Ty<'so>>, Context<'so>)>;
+type GoalMap<'so, S> = HashMap<usize, (Rc<Ty<'so, S>>, Context<'so, S>)>;
 
-fn push_goal<'so>(map: &mut GoalMap<'so>, id: usize, ty: Rc<Ty<'so>>, ctx: Context<'so>) {
+fn push_goal<'so, S>(map: &mut GoalMap<'so, S>, id: usize, ty: Rc<Ty<'so, S>>, ctx: Context<'so, S>)
+where
+    S: IdentKind<'so>,
+{
     map.insert(id, (ty, ctx));
 }
 
-fn pop_goal<'so>(map: &mut GoalMap<'so>, id: usize) {
+fn pop_goal<'so, S>(map: &mut GoalMap<'so, S>, id: usize)
+where
+    S: IdentKind<'so>,
+{
     let _ = map.remove(&id);
 }
 
 // A hole type for use in an assistant session; attaches a goal ID and updates goals when checked
 
-struct Goal<'so> {
+struct Goal<'so, S: IdentKind<'so>> {
     id: usize,
-    map: Rc<RefCell<GoalMap<'so>>>,
+    map: Rc<RefCell<GoalMap<'so, S>>>,
 }
 
-impl Display for Goal<'_> {
+impl<'so, S> Display for Goal<'so, S>
+where
+    S: IdentKind<'so>,
+{
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "?{}", self.id)
     }
 }
 
-impl Debug for Goal<'_> {
+impl<'so, S> Debug for Goal<'so, S>
+where
+    S: IdentKind<'so>,
+{
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "_goal_{}", self.id)
     }
 }
 
-impl PartialEq for Goal<'_> {
+impl<'so, S> PartialEq for Goal<'so, S>
+where
+    S: IdentKind<'so>,
+{
     fn eq(&self, other: &Self) -> bool {
         self.id == other.id
     }
 }
 
-impl Eq for Goal<'_> {}
+impl<'so, S> Eq for Goal<'so, S> where S: IdentKind<'so> {}
 
-impl<'so> HoleWithEffect<'so> for Goal<'so> {
-    fn check(&self, ty: Rc<Ty<'so>>, ctx: &Context<'so>) {
+impl<'so, S> HoleKind<'so, S> for Goal<'so, S>
+where
+    S: IdentKind<'so>,
+{
+    fn check(&self, ty: Rc<Ty<'so, S>>, ctx: &Context<'so, S>) {
         push_goal(&mut self.map.borrow_mut(), self.id, ty.clone(), ctx.clone());
     }
 }
 
 // A type alias for expressions with goals
 
-type GoalExpr<'so> = Expr<'so, Goal<'so>>;
+type GoalExpr<'so, S> = Expr<'so, S, Goal<'so, S>>;
 
 // Assistant state
 
-enum AssistantError<'so> {
-    CannotRefine(TypeError<'so>),
+pub enum AssistantError<'so, S>
+where
+    S: IdentKind<'so>,
+{
+    CannotRefine(TypeError<'so, S>),
     BadGoalID(usize),
 }
 
-struct Assistant<'so> {
-    task: Rc<Ty<'so>>,
-    current_expr: Option<Expr<'so, Goal<'so>>>, // None means uninitialized
+// Assistant is parametric on the ident kind, but in the REPL we'll use owned String idents
+
+pub struct Assistant<'so, S>
+where
+    S: IdentKind<'so>,
+{
+    task: Rc<Ty<'so, S>>,
+    current_expr: Option<Expr<'so, S, Goal<'so, S>>>, // None means uninitialized
     goal_counter: usize,
-    goal_map: Rc<RefCell<GoalMap<'so>>>,
+    goal_map: Rc<RefCell<GoalMap<'so, S>>>,
 }
 
-impl<'so> Assistant<'so> {
-    fn make_assistant(task: Rc<Ty<'so>>) -> Assistant<'so> {
-        let mut map: GoalMap<'so> = HashMap::new();
+impl<'so, S> Assistant<'so, S>
+where
+    S: IdentKind<'so>,
+{
+    pub fn make_assistant(task: Ty<'so, S>) -> Assistant<'so, S> {
+        let task = Rc::new(task);
+        let mut map: GoalMap<'so, S> = HashMap::new();
         map.insert(0, (task.clone(), vec![].into()));
         let goal_map = Rc::new(RefCell::new(map));
         let mut assistant = Self {
@@ -80,7 +110,7 @@ impl<'so> Assistant<'so> {
             goal_counter: 1,
             goal_map,
         };
-        let init_expr: GoalExpr<'so> = Expr::ExpHole(Goal {
+        let init_expr: GoalExpr<'so, S> = Expr::ExpHole(Goal {
             id: 0,
             map: assistant.goal_map.clone(),
         });
@@ -88,11 +118,11 @@ impl<'so> Assistant<'so> {
         assistant
     }
 
-    fn refine_goal(
+    pub fn refine_goal(
         &mut self,
         id: usize,
-        pure_expr: PureExpr<'so>,
-    ) -> Result<(), AssistantError<'so>> {
+        pure_expr: PureExpr<'so, S>,
+    ) -> Result<(), AssistantError<'so, S>> {
         // Retrieve the task's type and context
         let (task_ty, mut task_ctx) = self
             .goal_map
@@ -125,10 +155,10 @@ impl<'so> Assistant<'so> {
     // Include the repl in return if no substitution happened
     fn fill_goal(
         &mut self,
-        expr: GoalExpr<'so>,
+        expr: GoalExpr<'so, S>,
         repl_id: usize,
-        repl: GoalExpr<'so>,
-    ) -> (GoalExpr<'so>, Option<GoalExpr<'so>>) {
+        repl: GoalExpr<'so, S>,
+    ) -> (GoalExpr<'so, S>, Option<GoalExpr<'so, S>>) {
         use Expr::*;
         match expr {
             ExpVar { ident } => (ExpVar { ident }, Some(repl)),
@@ -181,7 +211,7 @@ impl<'so> Assistant<'so> {
         }
     }
 
-    fn number_holes(&mut self, expr: PureExpr<'so>) -> GoalExpr<'so> {
+    fn number_holes(&mut self, expr: PureExpr<'so, S>) -> GoalExpr<'so, S> {
         use Expr::*;
         match expr {
             ExpVar { ident } => ExpVar { ident },

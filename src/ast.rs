@@ -1,38 +1,67 @@
 use std::{
     fmt::{Debug, Display},
+    marker::PhantomData,
     rc::Rc,
 };
 
 use crate::check::Context;
 
-// A trait for attaching data to holes and injecting side-effects when type-checking them. The unit
-// impl is the trivial hole: no data or effects.
+// A trait for representing variable identifiers. This is so we can choose whether our expression
+// and type trees (and contexts) hold variable names as owned Strings, or as owned ints, or as str
+// borrows with the lifetime of the source being parsed.
+//
+// This is useful because, if we don't dispose the source string, then there's no need to
+// separately own each of the short slices for each identifier that we keep in the AST. But if
+// we're operating the assistant REPL, then we constantly parse and use expressions out of user
+// input, and we don't want to store all of those input strings for the entire session. So we might
+// decide to simply own the identifiers on those ASTs.
 
-pub trait HoleWithEffect<'so>: Debug + Eq {
-    fn check(&self, ty: Rc<Ty<'so>>, ctx: &Context<'so>);
+pub trait IdentKind<'so>: Debug + Clone + Display + Eq {
+    fn parse_ident(ident: &'so str) -> Self;
 }
 
-impl HoleWithEffect<'_> for () {
-    fn check(&self, _: Rc<Ty<'_>>, _: &Context) {}
+impl IdentKind<'_> for String {
+    fn parse_ident(ident: &str) -> Self {
+        ident.to_string()
+    }
+}
+
+impl IdentKind<'_> for Rc<String> {
+    fn parse_ident(ident: &str) -> Self {
+        Rc::new(ident.to_string())
+    }
+}
+
+impl<'so> IdentKind<'so> for &'so str {
+    fn parse_ident(ident: &'so str) -> Self {
+        ident
+    }
 }
 
 // AST nodes for types: either a type variable, or an arrow type
 
 #[derive(Debug, PartialEq, Eq)]
-pub enum Ty<'so> {
+pub enum Ty<'so, S>
+where
+    S: IdentKind<'so>,
+{
     TyVar {
-        ident: &'so str,
+        ident: S,
+        phantom: PhantomData<&'so ()>,
     },
     Arrow {
-        domain: Rc<Ty<'so>>,
-        range: Rc<Ty<'so>>,
+        domain: Rc<Ty<'so, S>>,
+        range: Rc<Ty<'so, S>>,
     },
 }
 
-impl Display for Ty<'_> {
+impl<'so, S> Display for Ty<'so, S>
+where
+    S: IdentKind<'so>,
+{
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::TyVar { ident } => write!(f, "{ident}"),
+            Self::TyVar { ident, .. } => write!(f, "{ident}"),
             Self::Arrow { domain, range } => {
                 write!(f, "({} -> {})", domain.to_string(), range.to_string())
             }
@@ -40,32 +69,54 @@ impl Display for Ty<'_> {
     }
 }
 
-// AST nodes for expressions, parametrized over the hole type H
+// A trait for attaching data to holes and injecting side-effects when type-checking them. This is
+// mainly so that we can inject effects when refining expressions in the assistant REPL. The unit
+// impl is the trivial hole: no data or effects.
+
+pub trait HoleKind<'so, S>: Debug + Eq
+where
+    S: IdentKind<'so>,
+{
+    fn check(&self, ty: Rc<Ty<'so, S>>, ctx: &Context<'so, S>);
+}
+
+impl<'so, S> HoleKind<'so, S> for ()
+where
+    S: IdentKind<'so>,
+{
+    fn check(&self, _: Rc<Ty<'so, S>>, _: &Context<'so, S>) {}
+}
+
+// AST nodes for expressions, parametrized over the ident and hole types
 
 #[derive(Debug, PartialEq, Eq)]
-pub enum Expr<'so, H>
+pub enum Expr<'so, S, H>
 where
-    H: HoleWithEffect<'so>,
+    S: IdentKind<'so>,
+    H: HoleKind<'so, S>,
 {
     ExpVar {
-        ident: &'so str,
+        ident: S,
     },
     Lambda {
-        var_ident: &'so str,
-        body: Box<Expr<'so, H>>,
+        var_ident: S,
+        body: Box<Expr<'so, S, H>>,
     },
     App {
-        func: Box<Expr<'so, H>>,
-        arg: Box<Expr<'so, H>>,
+        func: Box<Expr<'so, S, H>>,
+        arg: Box<Expr<'so, S, H>>,
     },
     Ann {
-        expr: Box<Expr<'so, H>>,
-        ty: Rc<Ty<'so>>,
+        expr: Box<Expr<'so, S, H>>,
+        ty: Rc<Ty<'so, S>>,
     },
     ExpHole(H),
 }
 
-impl Display for Expr<'_, ()> {
+impl<'so, S> Display for Expr<'so, S, ()>
+where
+    S: IdentKind<'so>,
+{
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::ExpVar { ident } => write!(f, "{ident}"),
@@ -79,9 +130,12 @@ impl Display for Expr<'_, ()> {
     }
 }
 
-// A handy alias for expressions with trivial holes
+// Some handy type aliases for expressions with trivial holes, and in particular with borrowed
+// idents
 
-pub type PureExpr<'so> = Expr<'so, ()>;
+pub type PureExpr<'so, S> = Expr<'so, S, ()>;
+pub type PureExprWithBorrowedIdents<'so> = Expr<'so, &'so str, ()>;
+pub type PureExprWithOwnedIdents = Expr<'static, String, ()>;
 
 // Now, parser stuff.
 
@@ -170,14 +224,20 @@ impl<'so> Parser<'so> {
         }
     }
 
-    fn try_parse_hole(&mut self) -> Option<&'so str> {
+    fn try_parse_hole<S>(&mut self) -> Option<S>
+    where
+        S: IdentKind<'so>,
+    {
         let left = self.cursor;
         self.expect_advance_char('_').ok()?;
-        let _ = self.try_parse_ident().is_some();
-        Some(&self.source[left..self.cursor])
+        let _ = self.try_parse_ident::<S>().is_some();
+        Some(IdentKind::parse_ident(&self.source[left..self.cursor]))
     }
 
-    fn try_parse_ident(&mut self) -> Option<&'so str> {
+    fn try_parse_ident<S>(&mut self) -> Option<S>
+    where
+        S: IdentKind<'so>,
+    {
         let left = self.cursor;
 
         while let Some(ch_len) = self
@@ -191,11 +251,14 @@ impl<'so> Parser<'so> {
         if self.cursor == left {
             None
         } else {
-            Some(&self.source[left..self.cursor])
+            Some(IdentKind::parse_ident(&self.source[left..self.cursor]))
         }
     }
 
-    fn parse_sexp(&mut self) -> ParseResult<PureExpr<'so>> {
+    fn parse_sexp<S>(&mut self) -> ParseResult<PureExpr<'so, S>>
+    where
+        S: IdentKind<'so>,
+    {
         use Expr::*;
 
         match self.peek_char() {
@@ -246,7 +309,7 @@ impl<'so> Parser<'so> {
                 expr_res
             }
             Some('_') => self
-                .try_parse_hole()
+                .try_parse_hole::<S>()
                 .map(|_| ExpHole(()))
                 .ok_or(ParseError::ExpectedHole),
             _ => self
@@ -256,7 +319,10 @@ impl<'so> Parser<'so> {
         }
     }
 
-    fn parse_ty(&mut self) -> ParseResult<Ty<'so>> {
+    fn parse_ty<S>(&mut self) -> ParseResult<Ty<'so, S>>
+    where
+        S: IdentKind<'so>,
+    {
         use Ty::*;
 
         if self.peek_char().map_or(false, |it| it == '(') {
@@ -284,12 +350,17 @@ impl<'so> Parser<'so> {
         } else {
             // Type variable
             self.try_parse_ident()
-                .map(|ident| TyVar { ident })
+                .map(|ident| TyVar {
+                    ident: IdentKind::parse_ident(ident),
+                    phantom: PhantomData,
+                })
                 .ok_or(ParseError::ExpectedIdent)
         }
     }
 
-    fn parse_source_to_pure_expr(&mut self) -> ParseResult<PureExpr<'so>> {
+    fn parse_pure_expr_with_borrowed_idents(
+        &mut self,
+    ) -> ParseResult<PureExprWithBorrowedIdents<'so>> {
         self.eat_whitespace();
         let expr = self.parse_sexp()?;
         self.eat_whitespace();
@@ -297,7 +368,7 @@ impl<'so> Parser<'so> {
         Ok(expr)
     }
 
-    fn parse_source_to_ty(&mut self) -> ParseResult<Ty<'so>> {
+    fn parse_ty_with_borrowed_idents(&mut self) -> ParseResult<Ty<'so, &'so str>> {
         self.eat_whitespace();
         let ty = self.parse_ty()?;
         self.eat_whitespace();
@@ -306,13 +377,13 @@ impl<'so> Parser<'so> {
     }
 }
 
-impl<'so> TryFrom<&'so str> for PureExpr<'so> {
+impl<'so> TryFrom<&'so str> for PureExprWithBorrowedIdents<'so> {
     type Error = String;
 
     fn try_from(source: &'so str) -> Result<Self, Self::Error> {
         let mut parser: Parser<'so> = source.into();
         parser
-            .parse_source_to_pure_expr()
+            .parse_pure_expr_with_borrowed_idents()
             .map_err(|e| e.to_string())
     }
 }
@@ -321,7 +392,9 @@ impl<'so> TryFrom<&'so str> for PureExpr<'so> {
 
 #[cfg(test)]
 mod tests {
-    use super::{Expr::*, PureExpr, Ty::*};
+    use std::marker::PhantomData;
+
+    use super::{Expr::*, PureExprWithBorrowedIdents, Ty::*};
 
     #[test]
     fn parse_simple_exps() {
@@ -350,7 +423,11 @@ mod tests {
         let source = "(x: T)";
         let expected = Ann {
             expr: (ExpVar { ident: "x" }).into(),
-            ty: (TyVar { ident: "T" }).into(),
+            ty: (TyVar {
+                ident: "T",
+                phantom: PhantomData,
+            })
+            .into(),
         };
         assert_eq!(Ok(expected), source.try_into());
 
@@ -360,8 +437,16 @@ mod tests {
             body: (ExpVar { ident: "a" }).into(),
         };
         let annot = Arrow {
-            domain: (TyVar { ident: "T" }).into(),
-            range: (TyVar { ident: "W" }).into(),
+            domain: (TyVar {
+                ident: "T",
+                phantom: PhantomData,
+            })
+            .into(),
+            range: (TyVar {
+                ident: "W",
+                phantom: PhantomData,
+            })
+            .into(),
         };
         let expected = Ann {
             expr: lam.into(),
@@ -373,40 +458,52 @@ mod tests {
     #[test]
     fn print_simple_exps() {
         let expected = "x";
-        let ast: PureExpr = ExpVar { ident: "x" };
+        let ast: PureExprWithBorrowedIdents = ExpVar { ident: "x" };
         assert_eq!(expected, ast.to_string());
 
         let expected = "(Lam x => x)";
-        let ast: PureExpr = Lambda {
+        let ast: PureExprWithBorrowedIdents = Lambda {
             var_ident: "x",
             body: (ExpVar { ident: "x" }).into(),
         };
         assert_eq!(expected, ast.to_string());
 
         let expected = "(f a)";
-        let ast: PureExpr = App {
+        let ast: PureExprWithBorrowedIdents = App {
             func: (ExpVar { ident: "f" }).into(),
             arg: (ExpVar { ident: "a" }).into(),
         };
         assert_eq!(expected, ast.to_string());
 
         let expected = "(x : T)";
-        let ast: PureExpr = Ann {
+        let ast: PureExprWithBorrowedIdents = Ann {
             expr: (ExpVar { ident: "x" }).into(),
-            ty: (TyVar { ident: "T" }).into(),
+            ty: (TyVar {
+                ident: "T",
+                phantom: PhantomData,
+            })
+            .into(),
         };
         assert_eq!(expected, ast.to_string());
 
         let expected = "((Lam x => a) : (T -> W))";
-        let lam: PureExpr = Lambda {
+        let lam: PureExprWithBorrowedIdents = Lambda {
             var_ident: "x",
             body: (ExpVar { ident: "a" }).into(),
         };
         let annot = Arrow {
-            domain: (TyVar { ident: "T" }).into(),
-            range: (TyVar { ident: "W" }).into(),
+            domain: (TyVar {
+                ident: "T",
+                phantom: PhantomData,
+            })
+            .into(),
+            range: (TyVar {
+                ident: "W",
+                phantom: PhantomData,
+            })
+            .into(),
         };
-        let ast: PureExpr = Ann {
+        let ast: PureExprWithBorrowedIdents = Ann {
             expr: lam.into(),
             ty: annot.into(),
         };

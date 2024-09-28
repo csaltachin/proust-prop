@@ -1,51 +1,80 @@
-use std::rc::Rc;
+use std::{fmt::Display, marker::PhantomData, rc::Rc};
 
-use crate::ast::{Expr, HoleWithEffect, Ty};
+use crate::ast::{Expr, HoleKind, IdentKind, Ty};
 
 #[derive(Debug, PartialEq, Eq)]
-pub enum TypeError<'so> {
+pub enum TypeError<'so, S>
+where
+    S: IdentKind<'so>,
+{
     CannotSynth,
     CannotCheck,
-    NotInContext(&'so str),
+    NotInContext(S, PhantomData<&'so ()>),
 }
 
-type TypeResult<'so, T> = Result<T, TypeError<'so>>;
+impl<'so, S> Display for TypeError<'so, S>
+where
+    S: IdentKind<'so>,
+{
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::CannotSynth => write!(f, "Cannot synthesize"),
+            Self::CannotCheck => write!(f, "Cannot check"),
+            Self::NotInContext(ident, _) => {
+                write!(f, "Cannot find variable \"{ident}\" in context")
+            }
+        }
+    }
+}
+
+type TypeResult<'so, S, T> = Result<T, TypeError<'so, S>>;
 
 #[derive(Clone)]
-pub struct Context<'so> {
-    ty_bindings: Vec<(&'so str, Rc<Ty<'so>>)>,
+pub struct Context<'so, S>
+where
+    S: IdentKind<'so>,
+{
+    ty_bindings: Vec<(S, Rc<Ty<'so, S>>)>,
 }
 
-impl<'so> From<Vec<(&'so str, Rc<Ty<'so>>)>> for Context<'so> {
-    fn from(ty_bindings: Vec<(&'so str, Rc<Ty<'so>>)>) -> Self {
+impl<'so, S> From<Vec<(S, Rc<Ty<'so, S>>)>> for Context<'so, S>
+where
+    S: IdentKind<'so>,
+{
+    fn from(ty_bindings: Vec<(S, Rc<Ty<'so, S>>)>) -> Self {
         Self { ty_bindings }
     }
 }
 
-impl<'so> Context<'so> {
-    fn lookup(&self, name: &'so str) -> Option<Rc<Ty<'so>>> {
+impl<'so, S> Context<'so, S>
+where
+    S: IdentKind<'so>,
+{
+    fn lookup(&self, name: &S) -> Option<Rc<Ty<'so, S>>> {
         self.ty_bindings
             .iter()
             .rev()
-            .find_map(|(k, v)| if *k == name { Some(v.clone()) } else { None })
+            .find_map(|(k, v)| if *k == *name { Some(v.clone()) } else { None })
     }
 
-    fn push(&mut self, name: &'so str, ty: Rc<Ty<'so>>) {
-        self.ty_bindings.push((name, ty));
+    fn push(&mut self, name: &S, ty: Rc<Ty<'so, S>>) {
+        // TODO: This clones the key to insert it, is there a better way to parametrize this?
+        self.ty_bindings.push((name.clone(), ty));
     }
 
-    fn pop(&mut self) -> Option<(&'so str, Rc<Ty<'so>>)> {
+    fn pop(&mut self) -> Option<(S, Rc<Ty<'so, S>>)> {
         self.ty_bindings.pop()
     }
 }
 
-pub fn type_check<'so, H>(
-    ctx: &mut Context<'so>,
-    expr: &Expr<'so, H>,
-    ty: Rc<Ty<'so>>,
-) -> TypeResult<'so, ()>
+pub fn type_check<'so, S, H>(
+    ctx: &mut Context<'so, S>,
+    expr: &Expr<'so, S, H>,
+    ty: Rc<Ty<'so, S>>,
+) -> TypeResult<'so, S, ()>
 where
-    H: HoleWithEffect<'so>,
+    S: IdentKind<'so>,
+    H: HoleKind<'so, S>,
 {
     use Expr::*;
     use Ty::*;
@@ -82,12 +111,13 @@ where
     }
 }
 
-pub fn type_synth<'so, H>(
-    ctx: &mut Context<'so>,
-    expr: &Expr<'so, H>,
-) -> TypeResult<'so, Rc<Ty<'so>>>
+pub fn type_synth<'so, S, H>(
+    ctx: &mut Context<'so, S>,
+    expr: &Expr<'so, S, H>,
+) -> TypeResult<'so, S, Rc<Ty<'so, S>>>
 where
-    H: HoleWithEffect<'so>,
+    S: IdentKind<'so>,
+    H: HoleKind<'so, S>,
 {
     use Expr::*;
     use Ty::*;
@@ -112,7 +142,10 @@ where
             .map(|()| ty.clone())
             .map_err(|_| CannotSynth),
         // The only way to synth an ExpVar is if the context has a binding for the ident
-        ExpVar { ident } => ctx.lookup(ident).ok_or(NotInContext(ident)),
+        ExpVar { ident } => ctx
+            .lookup(ident)
+            // The ident is cloned to be held by the error
+            .ok_or(NotInContext(ident.clone(), PhantomData)),
         ExpHole(..) => Err(CannotSynth),
     }
 }
@@ -122,127 +155,146 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ast::PureExpr;
+    use crate::ast::PureExprWithBorrowedIdents;
     use Expr::*;
     use Ty::*;
     use TypeError::*;
 
+    type StaticContext = Context<'static, &'static str>;
+
+    fn ty_var<'so, S>(ident: S) -> Ty<'so, S>
+    where
+        S: IdentKind<'so>,
+    {
+        TyVar {
+            ident,
+            phantom: PhantomData,
+        }
+    }
+
+    fn err_not_in_context<'so, S, T>(ident: S) -> TypeResult<'so, S, T>
+    where
+        S: IdentKind<'so>,
+    {
+        Err(NotInContext(ident, PhantomData))
+    }
+
     #[test]
     fn simple_checks() {
         // Check ExpVar that is already in context...
-        let expr: PureExpr = ExpVar { ident: "x" };
-        let ty = Rc::new(TyVar { ident: "T" });
-        let mut ctx: Context = vec![("x", ty.clone())].into();
+        let expr: PureExprWithBorrowedIdents = ExpVar { ident: "x" };
+        let ty = Rc::new(ty_var("T"));
+        let mut ctx: StaticContext = vec![("x", ty.clone())].into();
         let check_res = type_check(&mut ctx, &expr, ty.clone());
         assert_eq!(check_res, Ok(()));
 
         // ...and without context
-        let mut ctx: Context = vec![].into();
+        let mut ctx: StaticContext = vec![].into();
         let check_res = type_check(&mut ctx, &expr, ty);
         // The check tries a synth and propagates the synth error
-        assert_eq!(check_res, Err(NotInContext("x")));
+        assert_eq!(check_res, err_not_in_context("x"));
 
         // Check identity lambda as T -> T (with empty context)
-        let expr: PureExpr = Lambda {
+        let expr: PureExprWithBorrowedIdents = Lambda {
             var_ident: "x",
             body: (ExpVar { ident: "x" }).into(),
         };
         let ty = Rc::new(Arrow {
             // These two idents can be whatever as long as they're equal
-            domain: (TyVar { ident: "T" }).into(),
-            range: (TyVar { ident: "T" }).into(),
+            domain: (ty_var("T")).into(),
+            range: (ty_var("T")).into(),
         });
-        let mut ctx: Context = vec![].into();
+        let mut ctx: StaticContext = vec![].into();
         let check_res = type_check(&mut ctx, &expr, ty);
         assert_eq!(check_res, Ok(()));
 
         // Check constant lambda as T -> W with (c : W) in context...
-        let expr: PureExpr = Lambda {
+        let expr: PureExprWithBorrowedIdents = Lambda {
             var_ident: "x",
             body: (ExpVar { ident: "c" }).into(),
         };
         let lambda_ty = Rc::new(Arrow {
-            domain: (TyVar { ident: "T" }).into(),
-            range: (TyVar { ident: "W" }).into(),
+            domain: (ty_var("T")).into(),
+            range: (ty_var("W")).into(),
         });
-        let c_ty = Rc::new(TyVar { ident: "W" });
-        let mut ctx: Context = vec![("c", c_ty)].into();
+        let c_ty = Rc::new(ty_var("W"));
+        let mut ctx: StaticContext = vec![("c", c_ty)].into();
         let check_res = type_check(&mut ctx, &expr, lambda_ty.clone());
         assert_eq!(check_res, Ok(()));
 
         // ... and without (c : W) in context
-        let mut ctx: Context = vec![].into();
+        let mut ctx: StaticContext = vec![].into();
         let check_res = type_check(&mut ctx, &expr, lambda_ty);
         // This will check (c : W), use Turn, fail to synth, and forward the synth error
-        assert_eq!(check_res, Err(NotInContext("c")));
+        assert_eq!(check_res, err_not_in_context("c"));
 
         // Check application (f a : T) with both f, a in context...
-        let expr: PureExpr = App {
+        let expr: PureExprWithBorrowedIdents = App {
             func: (ExpVar { ident: "f" }).into(),
             arg: (ExpVar { ident: "a" }).into(),
         };
-        let app_ty = Rc::new(TyVar { ident: "W" });
+        let app_ty = Rc::new(ty_var("W"));
         let f_ty = Rc::new(Arrow {
-            domain: (TyVar { ident: "T" }).into(),
-            range: (TyVar { ident: "W" }).into(),
+            domain: (ty_var("T")).into(),
+            range: (ty_var("W")).into(),
         });
-        let a_ty = Rc::new(TyVar { ident: "T" });
-        let mut ctx: Context = vec![("f", f_ty), ("a", a_ty)].into();
+        let a_ty = Rc::new(ty_var("T"));
+        let mut ctx: StaticContext = vec![("f", f_ty), ("a", a_ty)].into();
         let check_res = type_check(&mut ctx, &expr, app_ty.clone());
         assert_eq!(check_res, Ok(()));
 
         // ...and with neither in context
-        let mut ctx: Context = vec![].into();
+        let mut ctx: StaticContext = vec![].into();
         let check_res = type_check(&mut ctx, &expr, app_ty);
         // The synth error is from turning on either (f : T -> W) or (a : T)
-        assert_eq!(check_res, Err(NotInContext("f")));
+        assert_eq!(check_res, err_not_in_context("f"));
 
         // Check application of un-annotated identity lambda to identity lambda...
-        let id1: PureExpr = Lambda {
+        let id1: PureExprWithBorrowedIdents = Lambda {
             var_ident: "x",
             body: (ExpVar { ident: "x" }).into(),
         };
-        let id2: PureExpr = Lambda {
+        let id2: PureExprWithBorrowedIdents = Lambda {
             var_ident: "y",
             body: (ExpVar { ident: "y" }).into(),
         };
-        let expr: PureExpr = App {
+        let expr: PureExprWithBorrowedIdents = App {
             func: id1.into(),
             arg: id2.into(),
         };
         // Checking for T -> T
         let ty = Rc::new(Arrow {
-            domain: (TyVar { ident: "T" }).into(),
-            range: (TyVar { ident: "T" }).into(),
+            domain: (ty_var("T")).into(),
+            range: (ty_var("T")).into(),
         });
-        let mut ctx: Context = vec![].into(); // Empty context
+        let mut ctx: StaticContext = vec![].into(); // Empty context
         let check_res = type_check(&mut ctx, &expr, ty);
         // Should fail with CannotSynth; it will try to synth id1, but we can't synth lambdas
         assert_eq!(check_res, Err(CannotSynth));
 
         // ...and check the same application but with the left identity annotated correctly
-        let id1: PureExpr = Lambda {
+        let id1: PureExprWithBorrowedIdents = Lambda {
             var_ident: "x",
             body: (ExpVar { ident: "x" }).into(),
         };
-        let id2: PureExpr = Lambda {
+        let id2: PureExprWithBorrowedIdents = Lambda {
             var_ident: "y",
             body: (ExpVar { ident: "y" }).into(),
         };
         // We annotate id1 with (T -> T) -> (T -> T)...
         let id1_ty = Arrow {
             domain: (Arrow {
-                domain: (TyVar { ident: "T" }).into(),
-                range: (TyVar { ident: "T" }).into(),
+                domain: (ty_var("T")).into(),
+                range: (ty_var("T")).into(),
             })
             .into(),
             range: (Arrow {
-                domain: (TyVar { ident: "T" }).into(),
-                range: (TyVar { ident: "T" }).into(),
+                domain: (ty_var("T")).into(),
+                range: (ty_var("T")).into(),
             })
             .into(),
         };
-        let ann_expr: PureExpr = App {
+        let ann_expr: PureExprWithBorrowedIdents = App {
             func: (Ann {
                 expr: id1.into(),
                 ty: id1_ty.into(),
@@ -252,10 +304,10 @@ mod tests {
         };
         // ...so that after application, we can infer T -> T
         let ty = Rc::new(Arrow {
-            domain: (TyVar { ident: "T" }).into(),
-            range: (TyVar { ident: "T" }).into(),
+            domain: (ty_var("T")).into(),
+            range: (ty_var("T")).into(),
         });
-        let mut ctx: Context = vec![].into();
+        let mut ctx: StaticContext = vec![].into();
         let check_res = type_check(&mut ctx, &ann_expr, ty);
         assert_eq!(check_res, Ok(()))
     }
@@ -263,17 +315,17 @@ mod tests {
     #[test]
     fn simple_synths() {
         // Synth for ExpVar that is already in context
-        let expr: PureExpr = ExpVar { ident: "x" };
-        let ty = Rc::new(TyVar { ident: "T" });
-        let mut ctx: Context = vec![("x", ty.clone())].into();
+        let expr: PureExprWithBorrowedIdents = ExpVar { ident: "x" };
+        let ty = Rc::new(ty_var("T"));
+        let mut ctx: StaticContext = vec![("x", ty.clone())].into();
         let synth_res = type_synth(&mut ctx, &expr);
         assert_eq!(synth_res, Ok(ty));
 
         // Synth for ExpVar not in context
-        let expr: PureExpr = ExpVar { ident: "x" };
-        let mut ctx: Context = vec![].into();
+        let expr: PureExprWithBorrowedIdents = ExpVar { ident: "x" };
+        let mut ctx: StaticContext = vec![].into();
         let synth_res = type_synth(&mut ctx, &expr);
-        assert_eq!(synth_res, Err(NotInContext("x")));
+        assert_eq!(synth_res, err_not_in_context("x"));
 
         // TODO: add more synth tests
     }
