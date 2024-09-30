@@ -332,12 +332,12 @@ where
                     let pairs_str = ctx
                         .get_bindings()
                         .iter()
-                        .map(|(var, ty)| format!("\n    {var}: {ty}"))
+                        .map(|(var, ty)| format!("\n|     {var} : {ty}"))
                         .collect::<Vec<_>>()
                         .concat();
-                    format!("\n  with context:{pairs_str}")
+                    format!("\n|   with context:{pairs_str}")
                 };
-                format!("[{id}] {ty}{ctx_str}")
+                format!("* ?{id} : {ty}{ctx_str}")
             })
             .collect()
     }

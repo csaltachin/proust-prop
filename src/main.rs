@@ -16,6 +16,7 @@ fn is_only_whitespace(s: &str) -> bool {
 enum ReplCommand {
     Task(Ty<'static, String>),
     Refine(usize, PureExpr<'static, String>),
+    ShowGoals,
     Quit,
     Nothing,
 }
@@ -98,6 +99,8 @@ impl FromStr for ReplCommand {
 
                 Ok(Refine(id, expr))
             }
+            // View goals
+            ("goals", _) => Ok(ShowGoals),
             // Quit
             ("quit", None) => Ok(Quit),
             ("quit", Some(_)) => {
@@ -159,6 +162,21 @@ fn assistant_repl() -> io::Result<()> {
                         },
                         None => {
                             println!("No task has been set yet; use \"task <type>\".");
+                        }
+                    },
+                    Ok(ShowGoals) => match assistant.as_ref() {
+                        None => {
+                            println!("No task has been set yet; use \"task <type>\".");
+                        }
+                        Some(asst) => {
+                            let goal_strs = asst.pretty_print_goals();
+                            if goal_strs.len() == 0 {
+                                println!("Task complete -- no goals remain.")
+                            } else {
+                                goal_strs.into_iter().for_each(|gs| {
+                                    println!("{gs}");
+                                });
+                            }
                         }
                     },
                     Ok(Nothing) => {
