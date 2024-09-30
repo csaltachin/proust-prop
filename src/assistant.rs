@@ -81,11 +81,14 @@ where
         match self {
             Self::ExpVar { ident } => write!(f, "{ident}"),
             Self::Lambda { var_ident, body } => {
-                write!(f, "(Lam {var_ident} => {})", body.to_string())
+                write!(f, "(Lam {var_ident} => {body})")
             }
-            Self::App { func, arg } => write!(f, "({} {})", func.to_string(), arg.to_string()),
-            Self::Ann { expr, ty } => write!(f, "({} : {})", expr.to_string(), ty.to_string()),
+            Self::App { func, arg } => write!(f, "({func} {arg})"),
+            Self::Ann { expr, ty } => write!(f, "({expr} : {ty})"),
             Self::ExpHole(Goal { id, .. }) => write!(f, "?{id}"),
+            Self::Pair { left, right } => write!(f, "(Cons {left} {right})"),
+            Self::First { pair } => write!(f, "(First {pair})"),
+            Self::Second { pair } => write!(f, "(Second {pair})"),
         }
     }
 }
@@ -193,6 +196,53 @@ where
                     maybe_repl,
                 )
             }
+            Ann { expr: inner, ty } => {
+                let (new_inner, maybe_repl) = self.fill_goal(*inner, repl_id, repl);
+                (
+                    Ann {
+                        expr: new_inner.into(),
+                        ty,
+                    },
+                    maybe_repl,
+                )
+            }
+            First { pair } => {
+                let (new_pair, maybe_repl) = self.fill_goal(*pair, repl_id, repl);
+                (
+                    First {
+                        pair: new_pair.into(),
+                    },
+                    maybe_repl,
+                )
+            }
+            Second { pair } => {
+                let (new_pair, maybe_repl) = self.fill_goal(*pair, repl_id, repl);
+                (
+                    Second {
+                        pair: new_pair.into(),
+                    },
+                    maybe_repl,
+                )
+            }
+            Pair { left, right } => match self.fill_goal(*left, repl_id, repl) {
+                (new_left, None) => (
+                    Pair {
+                        left: new_left.into(),
+                        right,
+                    },
+                    None,
+                ),
+                (same_left, Some(same_repl)) => {
+                    let (new_right, maybe_repl) = self.fill_goal(*right, repl_id, same_repl);
+                    (
+                        Pair {
+                            left: same_left.into(),
+                            right: new_right.into(),
+                        },
+                        maybe_repl,
+                    )
+                }
+            },
             App { func, arg } => match self.fill_goal(*func, repl_id, repl) {
                 (new_func, None) => (
                     App {
@@ -212,16 +262,6 @@ where
                     )
                 }
             },
-            Ann { expr: inner, ty } => {
-                let (new_inner, maybe_repl) = self.fill_goal(*inner, repl_id, repl);
-                (
-                    Ann {
-                        expr: new_inner.into(),
-                        ty,
-                    },
-                    maybe_repl,
-                )
-            }
             ExpHole(Goal { id, map }) => {
                 if id == repl_id {
                     (repl, None)
@@ -240,6 +280,16 @@ where
                 var_ident,
                 body: self.number_holes(*body).into(),
             },
+            Ann { expr: inner, ty } => Ann {
+                expr: self.number_holes(*inner).into(),
+                ty,
+            },
+            First { pair } => First {
+                pair: self.number_holes(*pair).into(),
+            },
+            Second { pair } => Second {
+                pair: self.number_holes(*pair).into(),
+            },
             App { func, arg } => {
                 // TODO: does this panic?
                 // (I think it shouldn't, we are just cloning an Rc at the leafs)
@@ -250,10 +300,14 @@ where
                     arg: new_arg.into(),
                 }
             }
-            Ann { expr: inner, ty } => Ann {
-                expr: self.number_holes(*inner).into(),
-                ty,
-            },
+            Pair { left, right } => {
+                let new_left = self.number_holes(*left);
+                let new_right = self.number_holes(*right);
+                Pair {
+                    left: new_left.into(),
+                    right: new_right.into(),
+                }
+            }
             ExpHole(()) => {
                 let id = self.goal_counter;
                 self.goal_counter += 1;

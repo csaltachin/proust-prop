@@ -106,6 +106,20 @@ where
             // But if ty is not of the form T -> W, then we failed, because we can't synth lambdas
             _ => Err(CannotCheck),
         },
+        // Handle pairs
+        Pair { left, right } => match ty.as_ref() {
+            // To check Pair as T & W, check left : T and right : W
+            Con {
+                left: left_ty,
+                right: right_ty,
+            } => {
+                type_check(ctx, left, left_ty.clone())?;
+                type_check(ctx, right, right_ty.clone())?;
+                Ok(())
+            }
+            // If ty is not a conjunction, it's a mismatch for a pair
+            _ => Err(CannotCheck),
+        },
         // For all other exprs we use [Turn]: try to synth T' for expr, and verify that T' === T
         _ => type_synth(ctx, expr).and_then(|actual_ty| {
             // NOTE: This uses the Eq trait, but it should be tweaked if we want to allow, for
@@ -134,7 +148,7 @@ where
     match expr {
         // Cannot synth lambdas
         Lambda { .. } => Err(CannotSynth),
-        // To synth App as W, try to synth func as T -> W, then check arg : T
+        // To synth App as some W, try to synth func as T -> W, then check arg : T
         App { func, arg } => {
             let func_synth = type_synth(ctx, func)?;
             match &*func_synth {
@@ -149,12 +163,30 @@ where
         Ann { expr, ty } => type_check(ctx, expr, ty.clone())
             .map(|()| ty.clone())
             .map_err(|_| CannotSynth),
+        // To synth First as some T, try to synth pair as T & W and pick T
+        First { pair } => {
+            let pair_synth = type_synth(ctx, pair)?;
+            match &*pair_synth {
+                Con { left, .. } => Ok(left.clone()),
+                _ => Err(CannotSynth),
+            }
+        }
+        // To synth Second as some W, try to synth pair as T & W and pick W
+        Second { pair } => {
+            let pair_synth = type_synth(ctx, pair)?;
+            match &*pair_synth {
+                Con { right, .. } => Ok(right.clone()),
+                _ => Err(CannotSynth),
+            }
+        }
         // The only way to synth an ExpVar is if the context has a binding for the ident
         ExpVar { ident } => ctx
             .lookup(ident)
             // The ident is cloned to be held by the error
             .ok_or(NotInContext(ident.clone(), PhantomData)),
         ExpHole(..) => Err(CannotSynth),
+        // TODO: do we want synth rules for Pair, First, Second, etc?
+        _ => Err(CannotSynth),
     }
 }
 

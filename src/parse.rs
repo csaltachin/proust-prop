@@ -170,6 +170,29 @@ impl<'so> Parser<'so> {
                         var_ident,
                         body: body.into(),
                     })
+                } else if self.try_consume_token("Cons") {
+                    // Cons (&-intro)
+                    self.eat_whitespace();
+                    let left = self.parse_sexp()?;
+                    self.eat_whitespace();
+                    let right = self.parse_sexp()?;
+                    self.eat_whitespace();
+                    Ok(Pair {
+                        left: left.into(),
+                        right: right.into(),
+                    })
+                } else if self.try_consume_token("First") {
+                    // First (&-elim0)
+                    self.eat_whitespace();
+                    let pair = self.parse_sexp()?;
+                    self.eat_whitespace();
+                    Ok(First { pair: pair.into() })
+                } else if self.try_consume_token("Second") {
+                    // Second (&-elim1)
+                    self.eat_whitespace();
+                    let pair = self.parse_sexp()?;
+                    self.eat_whitespace();
+                    Ok(Second { pair: pair.into() })
                 } else {
                     // Parse a first expression
                     let first_expr = self.parse_sexp()?;
@@ -216,27 +239,38 @@ impl<'so> Parser<'so> {
         use Ty::*;
 
         if self.peek_char().map_or(false, |it| it == '(') {
-            // Arrow
+            // Single or binary op
             self.expect_advance_char('(')?;
             self.eat_whitespace();
 
             let left_ty = self.parse_ty()?;
-
-            self.eat_whitespace();
-            self.try_consume_token("->")
-                .then_some(())
-                .ok_or(ParseError::ExpectedToken("->"))?;
             self.eat_whitespace();
 
-            let right_ty = self.parse_ty()?;
+            let ty = if self.try_consume_token("->") {
+                // Arrow type
+                self.eat_whitespace();
+                let right_ty = self.parse_ty()?;
+                Arrow {
+                    domain: left_ty.into(),
+                    range: right_ty.into(),
+                }
+            } else if self.try_consume_token("&") {
+                // Conjunction
+                self.eat_whitespace();
+                let right_ty = self.parse_ty()?;
+                Con {
+                    left: left_ty.into(),
+                    right: right_ty.into(),
+                }
+            } else {
+                // Single
+                left_ty
+            };
 
             self.eat_whitespace();
             self.expect_advance_char(')')?;
 
-            Ok(Arrow {
-                domain: left_ty.into(),
-                range: right_ty.into(),
-            })
+            Ok(ty)
         } else {
             // Type variable
             self.try_parse_ident()
@@ -250,7 +284,7 @@ impl<'so> Parser<'so> {
 
     // A couple convenience methods for ident-owned parsing without depending on the source
     // lifetime 'so
-    // TODO: can we avoid repeating these two functions from earlier?
+    // TODO: can we avoid repeating this code?
 
     fn parse_sexp_with_owned_idents(&mut self) -> ParseResult<PureExpr<'static, String>> {
         use Expr::*;
@@ -276,6 +310,29 @@ impl<'so> Parser<'so> {
                         var_ident,
                         body: body.into(),
                     })
+                } else if self.try_consume_token("Cons") {
+                    // Cons (&-intro)
+                    self.eat_whitespace();
+                    let left = self.parse_sexp_with_owned_idents()?;
+                    self.eat_whitespace();
+                    let right = self.parse_sexp_with_owned_idents()?;
+                    self.eat_whitespace();
+                    Ok(Pair {
+                        left: left.into(),
+                        right: right.into(),
+                    })
+                } else if self.try_consume_token("First") {
+                    // First (&-elim0)
+                    self.eat_whitespace();
+                    let pair = self.parse_sexp_with_owned_idents()?;
+                    self.eat_whitespace();
+                    Ok(First { pair: pair.into() })
+                } else if self.try_consume_token("Second") {
+                    // Second (&-elim1)
+                    self.eat_whitespace();
+                    let pair = self.parse_sexp_with_owned_idents()?;
+                    self.eat_whitespace();
+                    Ok(Second { pair: pair.into() })
                 } else {
                     // Parse a first expression
                     let first_expr = self.parse_sexp_with_owned_idents()?;
@@ -319,27 +376,38 @@ impl<'so> Parser<'so> {
         use Ty::*;
 
         if self.peek_char().map_or(false, |it| it == '(') {
-            // Arrow
+            // Single or binary op
             self.expect_advance_char('(')?;
             self.eat_whitespace();
 
             let left_ty = self.parse_ty_with_owned_idents()?;
-
-            self.eat_whitespace();
-            self.try_consume_token("->")
-                .then_some(())
-                .ok_or(ParseError::ExpectedToken("->"))?;
             self.eat_whitespace();
 
-            let right_ty = self.parse_ty_with_owned_idents()?;
+            let ty = if self.try_consume_token("->") {
+                // Arrow type
+                self.eat_whitespace();
+                let right_ty = self.parse_ty_with_owned_idents()?;
+                Arrow {
+                    domain: left_ty.into(),
+                    range: right_ty.into(),
+                }
+            } else if self.try_consume_token("&") {
+                // Conjunction
+                self.eat_whitespace();
+                let right_ty = self.parse_ty_with_owned_idents()?;
+                Con {
+                    left: left_ty.into(),
+                    right: right_ty.into(),
+                }
+            } else {
+                // Single
+                left_ty
+            };
 
             self.eat_whitespace();
             self.expect_advance_char(')')?;
 
-            Ok(Arrow {
-                domain: left_ty.into(),
-                range: right_ty.into(),
-            })
+            Ok(ty)
         } else {
             // Type variable
             self.try_parse_ident()
@@ -478,6 +546,13 @@ mod tests {
         assert_eq!(Ok(expected), source.try_into());
 
         let source = "(Lam x => x)";
+        let expected = Lambda {
+            var_ident: "x",
+            body: (ExpVar { ident: "x" }).into(),
+        };
+        assert_eq!(Ok(expected), source.try_into());
+
+        let source = "  (    Lam    x    =>x  )  ";
         let expected = Lambda {
             var_ident: "x",
             body: (ExpVar { ident: "x" }).into(),

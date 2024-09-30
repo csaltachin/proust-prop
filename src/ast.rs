@@ -53,6 +53,10 @@ where
         domain: Rc<Ty<'so, S>>,
         range: Rc<Ty<'so, S>>,
     },
+    Con {
+        left: Rc<Ty<'so, S>>,
+        right: Rc<Ty<'so, S>>,
+    },
 }
 
 impl<'so, S> Display for Ty<'so, S>
@@ -63,7 +67,10 @@ where
         match self {
             Self::TyVar { ident, .. } => write!(f, "{ident}"),
             Self::Arrow { domain, range } => {
-                write!(f, "({} -> {})", domain.to_string(), range.to_string())
+                write!(f, "({domain} -> {range})")
+            }
+            Self::Con { left, right } => {
+                write!(f, "({left} & {right})")
             }
         }
     }
@@ -111,6 +118,16 @@ where
         ty: Rc<Ty<'so, S>>,
     },
     ExpHole(H),
+    Pair {
+        left: Box<Expr<'so, S, H>>,
+        right: Box<Expr<'so, S, H>>,
+    },
+    First {
+        pair: Box<Expr<'so, S, H>>,
+    },
+    Second {
+        pair: Box<Expr<'so, S, H>>,
+    },
 }
 
 // We implement this directly for H = () expressions, because we don't want to rely on a Display
@@ -124,11 +141,14 @@ where
         match self {
             Self::ExpVar { ident } => write!(f, "{ident}"),
             Self::Lambda { var_ident, body } => {
-                write!(f, "(Lam {var_ident} => {})", body.to_string())
+                write!(f, "(Lam {var_ident} => {body})")
             }
-            Self::App { func, arg } => write!(f, "({} {})", func.to_string(), arg.to_string()),
-            Self::Ann { expr, ty } => write!(f, "({} : {})", expr.to_string(), ty.to_string()),
+            Self::App { func, arg } => write!(f, "({func} {arg})"),
+            Self::Ann { expr, ty } => write!(f, "({expr} : {ty})"),
             Self::ExpHole(..) => write!(f, "_"),
+            Self::Pair { left, right } => write!(f, "(Cons {left} {right})"),
+            Self::First { pair } => write!(f, "(First {pair})"),
+            Self::Second { pair } => write!(f, "(Second {pair})"),
         }
     }
 }
