@@ -106,7 +106,7 @@ where
             // But if ty is not of the form T -> W, then we failed, because we can't synth lambdas
             _ => Err(CannotCheck),
         },
-        // Handle pairs
+        // Handle products
         Pair { left, right } => match ty.as_ref() {
             // To check Pair as T & W, check left : T and right : W
             Con {
@@ -118,6 +118,49 @@ where
                 Ok(())
             }
             // If ty is not a conjunction, it's a mismatch for a pair
+            _ => Err(CannotCheck),
+        },
+        // Handle sums
+        Left { inner } => match ty.as_ref() {
+            Dis { left: left_ty, .. } => {
+                type_check(ctx, inner, left_ty.clone())?;
+                Ok(())
+            }
+            _ => Err(CannotCheck),
+        },
+        Right { inner } => match ty.as_ref() {
+            Dis {
+                right: right_ty, ..
+            } => {
+                type_check(ctx, inner, right_ty.clone())?;
+                Ok(())
+            }
+            _ => Err(CannotCheck),
+        },
+        // Matching on a sum
+        Match {
+            arg,
+            f_left,
+            f_right,
+        } => match type_synth(ctx, arg)?.as_ref() {
+            Dis {
+                left: left_ty,
+                right: right_ty,
+            } => {
+                let left_arrow = Arrow {
+                    domain: left_ty.clone(),
+                    range: ty.clone(),
+                };
+                type_check(ctx, f_left, left_arrow.into())?;
+
+                let right_arrow = Arrow {
+                    domain: right_ty.clone(),
+                    range: ty.clone(),
+                };
+                type_check(ctx, f_right, right_arrow.into())?;
+
+                Ok(())
+            }
             _ => Err(CannotCheck),
         },
         // For all other exprs we use [Turn]: try to synth T' for expr, and verify that T' === T

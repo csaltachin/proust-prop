@@ -57,6 +57,10 @@ where
         left: Rc<Ty<'so, S>>,
         right: Rc<Ty<'so, S>>,
     },
+    Dis {
+        left: Rc<Ty<'so, S>>,
+        right: Rc<Ty<'so, S>>,
+    },
 }
 
 impl<'so, S> Display for Ty<'so, S>
@@ -71,6 +75,9 @@ where
             }
             Self::Con { left, right } => {
                 write!(f, "({left} & {right})")
+            }
+            Self::Dis { left, right } => {
+                write!(f, "({left} | {right})")
             }
         }
     }
@@ -151,6 +158,17 @@ where
     Second {
         pair: Box<Expr<'so, S, H>>,
     },
+    Left {
+        inner: Box<Expr<'so, S, H>>,
+    },
+    Right {
+        inner: Box<Expr<'so, S, H>>,
+    },
+    Match {
+        arg: Box<Expr<'so, S, H>>,
+        f_left: Box<Expr<'so, S, H>>,
+        f_right: Box<Expr<'so, S, H>>,
+    },
 }
 
 // This uses the Display impls for Ty, the ident type S, and the hole type H
@@ -172,6 +190,13 @@ where
             Self::Pair { left, right } => write!(f, "(Cons {left} {right})"),
             Self::First { pair } => write!(f, "(First {pair})"),
             Self::Second { pair } => write!(f, "(Second {pair})"),
+            Self::Left { inner } => write!(f, "(Left {inner})"),
+            Self::Right { inner } => write!(f, "(Right {inner})"),
+            Self::Match {
+                arg,
+                f_left,
+                f_right,
+            } => write!(f, "(Match {arg} {f_left} {f_right})"),
         }
     }
 }

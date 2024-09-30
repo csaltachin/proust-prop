@@ -204,6 +204,24 @@ where
                     maybe_repl,
                 )
             }
+            Left { inner } => {
+                let (new_inner, maybe_repl) = self.fill_goal(*inner, repl_id, repl);
+                (
+                    Left {
+                        inner: new_inner.into(),
+                    },
+                    maybe_repl,
+                )
+            }
+            Right { inner } => {
+                let (new_inner, maybe_repl) = self.fill_goal(*inner, repl_id, repl);
+                (
+                    Right {
+                        inner: new_inner.into(),
+                    },
+                    maybe_repl,
+                )
+            }
             Pair { left, right } => match self.fill_goal(*left, repl_id, repl) {
                 (new_left, None) => (
                     Pair {
@@ -222,6 +240,42 @@ where
                         maybe_repl,
                     )
                 }
+            },
+            Match {
+                arg,
+                f_left,
+                f_right,
+            } => match self.fill_goal(*arg, repl_id, repl) {
+                (new_arg, None) => (
+                    Match {
+                        arg: new_arg.into(),
+                        f_left,
+                        f_right,
+                    },
+                    None,
+                ),
+                (same_arg, Some(same_repl)) => match self.fill_goal(*f_left, repl_id, same_repl) {
+                    (new_f_left, None) => (
+                        Match {
+                            arg: same_arg.into(),
+                            f_left: new_f_left.into(),
+                            f_right,
+                        },
+                        None,
+                    ),
+                    (same_f_left, Some(same_repl_again)) => {
+                        let (new_f_right, maybe_repl) =
+                            self.fill_goal(*f_right, repl_id, same_repl_again);
+                        (
+                            Match {
+                                arg: same_arg.into(),
+                                f_left: same_f_left.into(),
+                                f_right: new_f_right.into(),
+                            },
+                            maybe_repl,
+                        )
+                    }
+                },
             },
             App { func, arg } => match self.fill_goal(*func, repl_id, repl) {
                 (new_func, None) => (
@@ -270,6 +324,12 @@ where
             Second { pair } => Second {
                 pair: self.number_holes(*pair).into(),
             },
+            Left { inner } => Left {
+                inner: self.number_holes(*inner).into(),
+            },
+            Right { inner } => Right {
+                inner: self.number_holes(*inner).into(),
+            },
             App { func, arg } => {
                 // TODO: does this panic?
                 // (I think it shouldn't, we are just cloning an Rc at the leafs)
@@ -286,6 +346,20 @@ where
                 Pair {
                     left: new_left.into(),
                     right: new_right.into(),
+                }
+            }
+            Match {
+                arg,
+                f_left,
+                f_right,
+            } => {
+                let new_arg = self.number_holes(*arg);
+                let new_f_left = self.number_holes(*f_left);
+                let new_f_right = self.number_holes(*f_right);
+                Match {
+                    arg: new_arg.into(),
+                    f_left: new_f_left.into(),
+                    f_right: new_f_right.into(),
                 }
             }
             ExpHole(_) => {

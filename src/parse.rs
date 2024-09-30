@@ -193,6 +193,36 @@ impl<'so> Parser<'so> {
                     let pair = self.parse_sexp()?;
                     self.eat_whitespace();
                     Ok(Second { pair: pair.into() })
+                } else if self.try_consume_token("Left") {
+                    // Left (|-intro0)
+                    self.eat_whitespace();
+                    let inner = self.parse_sexp()?;
+                    self.eat_whitespace();
+                    Ok(Left {
+                        inner: inner.into(),
+                    })
+                } else if self.try_consume_token("Right") {
+                    // Right (|-intro1)
+                    self.eat_whitespace();
+                    let inner = self.parse_sexp()?;
+                    self.eat_whitespace();
+                    Ok(Right {
+                        inner: inner.into(),
+                    })
+                } else if self.try_consume_token("Match") {
+                    // Match (|-elim)
+                    self.eat_whitespace();
+                    let arg = self.parse_sexp()?;
+                    self.eat_whitespace();
+                    let f_left = self.parse_sexp()?;
+                    self.eat_whitespace();
+                    let f_right = self.parse_sexp()?;
+                    self.eat_whitespace();
+                    Ok(Match {
+                        arg: arg.into(),
+                        f_left: f_left.into(),
+                        f_right: f_right.into(),
+                    })
                 } else {
                     // Parse a first expression
                     let first_expr = self.parse_sexp()?;
@@ -256,6 +286,14 @@ impl<'so> Parser<'so> {
                 }
             } else if self.try_consume_token("&") {
                 // Conjunction
+                self.eat_whitespace();
+                let right_ty = self.parse_ty()?;
+                Con {
+                    left: left_ty.into(),
+                    right: right_ty.into(),
+                }
+            } else if self.try_consume_token("|") {
+                // Disjunction
                 self.eat_whitespace();
                 let right_ty = self.parse_ty()?;
                 Con {
@@ -333,6 +371,36 @@ impl<'so> Parser<'so> {
                     let pair = self.parse_sexp_with_owned_idents()?;
                     self.eat_whitespace();
                     Ok(Second { pair: pair.into() })
+                } else if self.try_consume_token("Left") {
+                    // Left (|-intro0)
+                    self.eat_whitespace();
+                    let inner = self.parse_sexp_with_owned_idents()?;
+                    self.eat_whitespace();
+                    Ok(Left {
+                        inner: inner.into(),
+                    })
+                } else if self.try_consume_token("Right") {
+                    // Right (|-intro1)
+                    self.eat_whitespace();
+                    let inner = self.parse_sexp_with_owned_idents()?;
+                    self.eat_whitespace();
+                    Ok(Right {
+                        inner: inner.into(),
+                    })
+                } else if self.try_consume_token("Match") {
+                    // Match (|-elim)
+                    self.eat_whitespace();
+                    let arg = self.parse_sexp_with_owned_idents()?;
+                    self.eat_whitespace();
+                    let f_left = self.parse_sexp_with_owned_idents()?;
+                    self.eat_whitespace();
+                    let f_right = self.parse_sexp_with_owned_idents()?;
+                    self.eat_whitespace();
+                    Ok(Match {
+                        arg: arg.into(),
+                        f_left: f_left.into(),
+                        f_right: f_right.into(),
+                    })
                 } else {
                     // Parse a first expression
                     let first_expr = self.parse_sexp_with_owned_idents()?;
@@ -396,6 +464,14 @@ impl<'so> Parser<'so> {
                 self.eat_whitespace();
                 let right_ty = self.parse_ty_with_owned_idents()?;
                 Con {
+                    left: left_ty.into(),
+                    right: right_ty.into(),
+                }
+            } else if self.try_consume_token("|") {
+                // Disjunction
+                self.eat_whitespace();
+                let right_ty = self.parse_ty_with_owned_idents()?;
+                Dis {
                     left: left_ty.into(),
                     right: right_ty.into(),
                 }
