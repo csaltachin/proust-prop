@@ -73,26 +73,6 @@ where
 
 type GoalExpr<'so, S> = Expr<'so, S, Goal<'so, S>>;
 
-impl<'so, S> Display for GoalExpr<'so, S>
-where
-    S: IdentKind<'so>,
-{
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::ExpVar { ident } => write!(f, "{ident}"),
-            Self::Lambda { var_ident, body } => {
-                write!(f, "(Lam {var_ident} => {body})")
-            }
-            Self::App { func, arg } => write!(f, "({func} {arg})"),
-            Self::Ann { expr, ty } => write!(f, "({expr} : {ty})"),
-            Self::ExpHole(Goal { id, .. }) => write!(f, "?{id}"),
-            Self::Pair { left, right } => write!(f, "(Cons {left} {right})"),
-            Self::First { pair } => write!(f, "(First {pair})"),
-            Self::Second { pair } => write!(f, "(Second {pair})"),
-        }
-    }
-}
-
 // Assistant state
 
 pub enum AssistantError<'so, S>
@@ -308,7 +288,7 @@ where
                     right: new_right.into(),
                 }
             }
-            ExpHole(()) => {
+            ExpHole(_) => {
                 let id = self.goal_counter;
                 self.goal_counter += 1;
                 ExpHole(Goal {

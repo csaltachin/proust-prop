@@ -1,6 +1,6 @@
 use std::{fmt::Display, marker::PhantomData, str::FromStr};
 
-use crate::ast::{Expr, IdentKind, PureExpr, Ty};
+use crate::ast::{Expr, IdentKind, PureExpr, Ty, UnitHole};
 
 enum ParseError {
     ExpectedChar(char),
@@ -223,7 +223,7 @@ impl<'so> Parser<'so> {
             }
             Some('_') => self
                 .try_parse_hole::<S>()
-                .map(|_| ExpHole(()))
+                .map(|_| ExpHole(UnitHole {}))
                 .ok_or(ParseError::ExpectedHole),
             _ => self
                 .try_parse_ident()
@@ -363,7 +363,7 @@ impl<'so> Parser<'so> {
             }
             Some('_') => self
                 .try_parse_owned_hole()
-                .map(|_| ExpHole(()))
+                .map(|_| ExpHole(UnitHole {}))
                 .ok_or(ParseError::ExpectedHole),
             _ => self
                 .try_parse_owned_ident()

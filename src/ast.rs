@@ -77,17 +77,40 @@ where
 }
 
 // A trait for attaching data to holes and injecting side-effects when type-checking them. This is
-// mainly so that we can inject effects when refining expressions in the assistant REPL. The unit
-// impl is the trivial hole: no data or effects.
+// mainly so that we can inject effects when refining expressions in the assistant REPL.
 
-pub trait HoleKind<'so, S>: Debug + Eq
+pub trait HoleKind<'so, S>: Debug + Display + Eq
 where
     S: IdentKind<'so>,
 {
     fn check(&self, ty: Rc<Ty<'so, S>>, ctx: &Context<'so, S>);
 }
 
-impl<'so, S> HoleKind<'so, S> for ()
+// Trivial hole: no side effects. This is an actual struct so that we can implement Display on it.
+
+pub struct UnitHole {}
+
+impl Debug for UnitHole {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "_")
+    }
+}
+
+impl Display for UnitHole {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "_")
+    }
+}
+
+impl PartialEq for UnitHole {
+    fn eq(&self, _: &Self) -> bool {
+        true
+    }
+}
+
+impl Eq for UnitHole {}
+
+impl<'so, S> HoleKind<'so, S> for UnitHole
 where
     S: IdentKind<'so>,
 {
@@ -130,12 +153,12 @@ where
     },
 }
 
-// We implement this directly for H = () expressions, because we don't want to rely on a Display
-// impl for ()
+// This uses the Display impls for Ty, the ident type S, and the hole type H
 
-impl<'so, S> Display for Expr<'so, S, ()>
+impl<'so, S, H> Display for Expr<'so, S, H>
 where
     S: IdentKind<'so>,
+    H: HoleKind<'so, S>,
 {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -145,7 +168,7 @@ where
             }
             Self::App { func, arg } => write!(f, "({func} {arg})"),
             Self::Ann { expr, ty } => write!(f, "({expr} : {ty})"),
-            Self::ExpHole(..) => write!(f, "_"),
+            Self::ExpHole(hole) => write!(f, "{hole}"),
             Self::Pair { left, right } => write!(f, "(Cons {left} {right})"),
             Self::First { pair } => write!(f, "(First {pair})"),
             Self::Second { pair } => write!(f, "(Second {pair})"),
@@ -155,7 +178,7 @@ where
 
 // A handy type alias for expressions with trivial holes
 
-pub type PureExpr<'so, S> = Expr<'so, S, ()>;
+pub type PureExpr<'so, S> = Expr<'so, S, UnitHole>;
 
 // Tests
 
@@ -164,9 +187,9 @@ mod tests {
     use crate::ast::{Expr::*, Ty::*};
     use std::marker::PhantomData;
 
-    use super::Expr;
+    use super::PureExpr;
 
-    type PureExprWithBorrowedIdents<'so> = Expr<'so, &'so str, ()>;
+    type PureExprWithBorrowedIdents<'so> = PureExpr<'so, &'so str>;
 
     #[test]
     fn print_simple_exps() {

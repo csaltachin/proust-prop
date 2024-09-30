@@ -195,11 +195,12 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ast::UnitHole;
     use Expr::*;
     use Ty::*;
     use TypeError::*;
 
-    type PureExprWithBorrowedIdents<'so> = Expr<'so, &'so str, ()>;
+    type PureExprWithBorrowedIdents<'so> = Expr<'so, &'so str, UnitHole>;
     type StaticContext = Context<'static, &'static str>;
 
     fn ty_var<'so, S>(ident: S) -> Ty<'so, S>
