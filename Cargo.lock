@@ -3,5 +3,5 @@
 version = 3
 
 [[package]]
-name = "prust"
+name = "proust-prop"
 version = "0.1.0"
