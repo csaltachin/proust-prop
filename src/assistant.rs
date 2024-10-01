@@ -17,13 +17,6 @@ where
     map.insert(id, (ty, ctx));
 }
 
-fn pop_goal<'so, S>(map: &mut GoalMap<'so, S>, id: usize)
-where
-    S: IdentKind<'so>,
-{
-    let _ = map.remove(&id);
-}
-
 // A hole type for use in an assistant session; attaches a goal ID and updates goals when checked
 
 struct Goal<'so, S: IdentKind<'so>> {
@@ -116,10 +109,6 @@ where
         });
         let _ = assistant.current_expr.insert(init_expr);
         assistant
-    }
-
-    pub fn get_task(&self) -> &Ty<'so, S> {
-        self.task.as_ref()
     }
 
     pub fn refine_goal(
@@ -217,6 +206,15 @@ where
                 let (new_inner, maybe_repl) = self.fill_goal(*inner, repl_id, repl);
                 (
                     Right {
+                        inner: new_inner.into(),
+                    },
+                    maybe_repl,
+                )
+            }
+            Never { inner } => {
+                let (new_inner, maybe_repl) = self.fill_goal(*inner, repl_id, repl);
+                (
+                    Never {
                         inner: new_inner.into(),
                     },
                     maybe_repl,
@@ -328,6 +326,9 @@ where
                 inner: self.number_holes(*inner).into(),
             },
             Right { inner } => Right {
+                inner: self.number_holes(*inner).into(),
+            },
+            Never { inner } => Never {
                 inner: self.number_holes(*inner).into(),
             },
             App { func, arg } => {

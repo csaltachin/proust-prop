@@ -61,6 +61,7 @@ where
         left: Rc<Ty<'so, S>>,
         right: Rc<Ty<'so, S>>,
     },
+    Bottom,
 }
 
 impl<'so, S> Display for Ty<'so, S>
@@ -79,6 +80,7 @@ where
             Self::Dis { left, right } => {
                 write!(f, "({left} | {right})")
             }
+            Ty::Bottom => write!(f, "#"),
         }
     }
 }
@@ -169,6 +171,9 @@ where
         f_left: Box<Expr<'so, S, H>>,
         f_right: Box<Expr<'so, S, H>>,
     },
+    Never {
+        inner: Box<Expr<'so, S, H>>,
+    },
 }
 
 // This uses the Display impls for Ty, the ident type S, and the hole type H
@@ -197,6 +202,7 @@ where
                 f_left,
                 f_right,
             } => write!(f, "(Match {arg} {f_left} {f_right})"),
+            Self::Never { inner } => write!(f, "(Never {inner})"),
         }
     }
 }

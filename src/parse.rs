@@ -223,6 +223,14 @@ impl<'so> Parser<'so> {
                         f_left: f_left.into(),
                         f_right: f_right.into(),
                     })
+                } else if self.try_consume_token("Never") {
+                    // Never (Bottom-elim)
+                    self.eat_whitespace();
+                    let inner = self.parse_sexp()?;
+                    self.eat_whitespace();
+                    Ok(Never {
+                        inner: inner.into(),
+                    })
                 } else {
                     // Parse a first expression
                     let first_expr = self.parse_sexp()?;
@@ -273,42 +281,55 @@ impl<'so> Parser<'so> {
             self.expect_advance_char('(')?;
             self.eat_whitespace();
 
-            let left_ty = self.parse_ty()?;
-            self.eat_whitespace();
-
-            let ty = if self.try_consume_token("->") {
-                // Arrow type
+            let ty = if self.try_consume_token("~") {
+                // Negation (parsed as T -> #)
                 self.eat_whitespace();
-                let right_ty = self.parse_ty()?;
+                let negated_ty = self.parse_ty()?;
                 Arrow {
-                    domain: left_ty.into(),
-                    range: right_ty.into(),
-                }
-            } else if self.try_consume_token("&") {
-                // Conjunction
-                self.eat_whitespace();
-                let right_ty = self.parse_ty()?;
-                Con {
-                    left: left_ty.into(),
-                    right: right_ty.into(),
-                }
-            } else if self.try_consume_token("|") {
-                // Disjunction
-                self.eat_whitespace();
-                let right_ty = self.parse_ty()?;
-                Con {
-                    left: left_ty.into(),
-                    right: right_ty.into(),
+                    domain: negated_ty.into(),
+                    range: Bottom.into(),
                 }
             } else {
-                // Single
-                left_ty
+                let left_ty = self.parse_ty()?;
+                self.eat_whitespace();
+
+                if self.try_consume_token("->") {
+                    // Arrow type
+                    self.eat_whitespace();
+                    let right_ty = self.parse_ty()?;
+                    Arrow {
+                        domain: left_ty.into(),
+                        range: right_ty.into(),
+                    }
+                } else if self.try_consume_token("&") {
+                    // Conjunction
+                    self.eat_whitespace();
+                    let right_ty = self.parse_ty()?;
+                    Con {
+                        left: left_ty.into(),
+                        right: right_ty.into(),
+                    }
+                } else if self.try_consume_token("|") {
+                    // Disjunction
+                    self.eat_whitespace();
+                    let right_ty = self.parse_ty()?;
+                    Dis {
+                        left: left_ty.into(),
+                        right: right_ty.into(),
+                    }
+                } else {
+                    // Single
+                    left_ty
+                }
             };
 
             self.eat_whitespace();
             self.expect_advance_char(')')?;
 
             Ok(ty)
+        } else if self.try_consume_token("#") {
+            // Bottom
+            Ok(Bottom)
         } else {
             // Type variable
             self.try_parse_ident()
@@ -401,6 +422,14 @@ impl<'so> Parser<'so> {
                         f_left: f_left.into(),
                         f_right: f_right.into(),
                     })
+                } else if self.try_consume_token("Never") {
+                    // Never (Bottom-elim)
+                    self.eat_whitespace();
+                    let inner = self.parse_sexp_with_owned_idents()?;
+                    self.eat_whitespace();
+                    Ok(Never {
+                        inner: inner.into(),
+                    })
                 } else {
                     // Parse a first expression
                     let first_expr = self.parse_sexp_with_owned_idents()?;
@@ -448,42 +477,55 @@ impl<'so> Parser<'so> {
             self.expect_advance_char('(')?;
             self.eat_whitespace();
 
-            let left_ty = self.parse_ty_with_owned_idents()?;
-            self.eat_whitespace();
-
-            let ty = if self.try_consume_token("->") {
-                // Arrow type
+            let ty = if self.try_consume_token("~") {
+                // Negation (parsed as T -> #)
                 self.eat_whitespace();
-                let right_ty = self.parse_ty_with_owned_idents()?;
+                let negated_ty = self.parse_ty_with_owned_idents()?;
                 Arrow {
-                    domain: left_ty.into(),
-                    range: right_ty.into(),
-                }
-            } else if self.try_consume_token("&") {
-                // Conjunction
-                self.eat_whitespace();
-                let right_ty = self.parse_ty_with_owned_idents()?;
-                Con {
-                    left: left_ty.into(),
-                    right: right_ty.into(),
-                }
-            } else if self.try_consume_token("|") {
-                // Disjunction
-                self.eat_whitespace();
-                let right_ty = self.parse_ty_with_owned_idents()?;
-                Dis {
-                    left: left_ty.into(),
-                    right: right_ty.into(),
+                    domain: negated_ty.into(),
+                    range: Bottom.into(),
                 }
             } else {
-                // Single
-                left_ty
+                let left_ty = self.parse_ty_with_owned_idents()?;
+                self.eat_whitespace();
+
+                if self.try_consume_token("->") {
+                    // Arrow type
+                    self.eat_whitespace();
+                    let right_ty = self.parse_ty_with_owned_idents()?;
+                    Arrow {
+                        domain: left_ty.into(),
+                        range: right_ty.into(),
+                    }
+                } else if self.try_consume_token("&") {
+                    // Conjunction
+                    self.eat_whitespace();
+                    let right_ty = self.parse_ty_with_owned_idents()?;
+                    Con {
+                        left: left_ty.into(),
+                        right: right_ty.into(),
+                    }
+                } else if self.try_consume_token("|") {
+                    // Disjunction
+                    self.eat_whitespace();
+                    let right_ty = self.parse_ty_with_owned_idents()?;
+                    Dis {
+                        left: left_ty.into(),
+                        right: right_ty.into(),
+                    }
+                } else {
+                    // Single
+                    left_ty
+                }
             };
 
             self.eat_whitespace();
             self.expect_advance_char(')')?;
 
             Ok(ty)
+        } else if self.try_consume_token("#") {
+            // Bottom
+            Ok(Bottom)
         } else {
             // Type variable
             self.try_parse_ident()
@@ -694,6 +736,10 @@ mod tests {
             domain: ty_var("T").into(),
             range: ty_var("W").into(),
         };
+        assert_eq!(Ok(expected), source.try_into());
+
+        let source = "#";
+        let expected: Ty<String> = Bottom;
         assert_eq!(Ok(expected), source.try_into());
     }
 }

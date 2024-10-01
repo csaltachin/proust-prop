@@ -163,10 +163,13 @@ where
             }
             _ => Err(CannotCheck),
         },
+        // Handle Never
+        Never { inner } => {
+            type_check(ctx, inner, Bottom.into())?;
+            Ok(())
+        }
         // For all other exprs we use [Turn]: try to synth T' for expr, and verify that T' === T
         _ => type_synth(ctx, expr).and_then(|actual_ty| {
-            // NOTE: This uses the Eq trait, but it should be tweaked if we want to allow, for
-            // example, actual_ty being a subtype of ty (hence casting to ty)
             if actual_ty == ty {
                 Ok(())
             } else {
